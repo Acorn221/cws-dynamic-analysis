@@ -4,6 +4,35 @@ import { logger } from '../logger.js';
 
 const log = logger.child({ component: 'detector' });
 
+/**
+ * Known-benign domains: first-party telemetry and major platforms whose
+ * normal traffic routinely matches heuristic patterns (base64 blobs,
+ * credential-like field names, cookie headers).  Canary detection is
+ * NEVER skipped — these only suppress pattern-based flags.
+ */
+const BENIGN_DOMAINS = new Set([
+  'unagi.amazon.com', 'unagi-na.amazon.com', 'fls-na.amazon.com',  // Amazon telemetry
+  'www.facebook.com',  // FB ajax/bz
+  'www.instagram.com',
+  'collector.github.com',  // GitHub telemetry
+  'ogads-pa.clients6.google.com',  // Google ads
+  'play.google.com',
+  'accounts.google.com',
+  'www.google.com',  // Google search
+  'www.youtube.com',  // YouTube
+  'www.reddit.com', 'www.redditstatic.com',
+  'en.wikipedia.org',
+  'api.github.com',
+]);
+
+const BENIGN_URL_PATTERNS = [
+  /\.token\.awswaf\.com\//,    // AWS WAF challenge tokens
+  /\/ajax\/bz\?/,              // Facebook telemetry
+  /\/api\/jnn\//,              // YouTube integrity
+  /\/gen_204\?/,               // Google beacons
+  /\/csm\//,                   // Amazon CSM
+];
+
 interface CanaryEntry {
   type: CanaryType;
   value: string;
@@ -86,29 +115,42 @@ export class Detector {
     // Suspicious pattern detection
     if (request.method === 'POST' || request.method === 'PUT') {
       const body = request.bodyPreview ?? '';
+      const domain = extractDomain(request.url);
+      const source = (request as any).source as string | undefined;
 
-      // Large POST to unknown domain
-      if ((request.bodySize ?? 0) > 5000) {
-        request.flagged = true;
-        request.flagReasons.push('large_outbound_post');
-      }
+      // Pattern-based flags only fire when the request comes from an
+      // extension OR targets a domain that isn't known-benign.  This
+      // eliminates FPs from AWS WAF tokens, Amazon telemetry, YouTube
+      // integrity tokens, Facebook analytics, etc.
+      const isBenignTarget =
+        source !== 'extension' &&
+        (BENIGN_DOMAINS.has(domain) ||
+          BENIGN_URL_PATTERNS.some((re) => re.test(request.url)));
 
-      // Base64 blobs (common exfil encoding)
-      if (/[A-Za-z0-9+/]{100,}={0,2}/.test(body)) {
-        request.flagged = true;
-        request.flagReasons.push('base64_blob');
-      }
+      if (!isBenignTarget) {
+        // Large POST to unknown domain
+        if ((request.bodySize ?? 0) > 5000) {
+          request.flagged = true;
+          request.flagReasons.push('large_outbound_post');
+        }
 
-      // Credential-like patterns
-      if (/(?:password|passwd|pwd|secret|token|api[_-]?key)/i.test(body)) {
-        request.flagged = true;
-        request.flagReasons.push('credential_pattern');
-      }
+        // Base64 blobs (common exfil encoding)
+        if (/[A-Za-z0-9+/]{100,}={0,2}/.test(body)) {
+          request.flagged = true;
+          request.flagReasons.push('base64_blob');
+        }
 
-      // Cookie-like patterns
-      if (/(?:cookie|session[_-]?id|csrf|jwt|auth[_-]?token)/i.test(body)) {
-        request.flagged = true;
-        request.flagReasons.push('cookie_pattern');
+        // Credential-like patterns
+        if (/(?:password|passwd|pwd|secret|token|api[_-]?key)/i.test(body)) {
+          request.flagged = true;
+          request.flagReasons.push('credential_pattern');
+        }
+
+        // Cookie-like patterns
+        if (/(?:cookie|session[_-]?id|csrf|jwt|auth[_-]?token)/i.test(body)) {
+          request.flagged = true;
+          request.flagReasons.push('cookie_pattern');
+        }
       }
     }
   }

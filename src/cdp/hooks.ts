@@ -41,35 +41,40 @@ export async function injectPageHooks(page: Page): Promise<void> {
 }
 
 /**
- * Inject service worker hooks via Runtime.evaluate.
+ * Inject service worker hooks via Runtime.evaluate (or skip if source-rewritten).
  * Must be called while the SW is paused (waitForDebuggerOnStart).
  * Hooks: chrome.cookies, chrome.tabs, chrome.history, chrome.storage,
  *        chrome.runtime.sendMessage, chrome.runtime.onMessage.
+ *
+ * @param skipEval - If true, hooks were already prepended to the SW source
+ *                   via source rewriting, so skip Runtime.evaluate injection.
  */
 export async function injectServiceWorkerHooks(
   session: CDPSession,
+  skipEval = false,
 ): Promise<void> {
-  const hookCode = await readFile(resolve(HOOKS_DIR, 'sw-hooks.js'), 'utf-8');
-
   await session.send('Runtime.enable');
 
-  // Add binding for hook callbacks
-  await session.send('Runtime.addBinding', { name: '__cwsSWHook__' });
+  if (!skipEval) {
+    const hookCode = await readFile(resolve(HOOKS_DIR, 'sw-hooks.js'), 'utf-8');
 
-  // Inject the hooks
-  const result = await session.send('Runtime.evaluate', {
-    expression: hookCode,
-    awaitPromise: false,
-    returnByValue: true,
-  });
+    // Inject the hooks via evaluate
+    const result = await session.send('Runtime.evaluate', {
+      expression: hookCode,
+      awaitPromise: false,
+      returnByValue: true,
+    });
 
-  if (result.exceptionDetails) {
-    log.error(
-      { error: result.exceptionDetails.text },
-      'Failed to inject SW hooks',
-    );
+    if (result.exceptionDetails) {
+      log.error(
+        { error: result.exceptionDetails.text },
+        'Failed to inject SW hooks',
+      );
+    } else {
+      log.debug('Service worker hooks injected via Runtime.evaluate');
+    }
   } else {
-    log.debug('Service worker hooks injected');
+    log.debug('Service worker hooks already source-rewritten, skipping eval');
   }
 
   // Resume the service worker
@@ -78,19 +83,29 @@ export async function injectServiceWorkerHooks(
 
 /**
  * Listen for hook callbacks from a service worker session.
- * SW hooks report via Runtime.bindingCalled events.
+ * SW hooks report via console.log('[CWS_HOOK]', jsonPayload) which
+ * surfaces as Runtime.consoleAPICalled events on the CDP session.
  */
 export function onServiceWorkerHookCallback(
   session: CDPSession,
   handler: (data: any) => void,
 ): void {
-  session.on('Runtime.bindingCalled' as any, (event: any) => {
-    if (event.name === '__cwsSWHook__') {
-      try {
-        handler(JSON.parse(event.payload));
-      } catch {
-        log.warn({ payload: event.payload }, 'Failed to parse SW hook payload');
-      }
+  // @ts-ignore — CDPSession event type
+  session.on('Runtime.consoleAPICalled', (event: any) => {
+    if (event.type !== 'log' || !event.args || event.args.length < 2) return;
+
+    // First arg should be the string '[CWS_HOOK]'
+    const prefixArg = event.args[0];
+    if (prefixArg?.type !== 'string' || prefixArg?.value !== '[CWS_HOOK]') return;
+
+    // Second arg is the JSON payload string
+    const payloadArg = event.args[1];
+    if (payloadArg?.type !== 'string') return;
+
+    try {
+      handler(JSON.parse(payloadArg.value));
+    } catch {
+      log.warn({ payload: payloadArg.value }, 'Failed to parse SW hook payload');
     }
   });
 }

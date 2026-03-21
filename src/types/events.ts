@@ -32,6 +32,10 @@ export interface NetworkRequest {
   bodyPreview?: string;
   responseBodyPreview?: string;
   targetType: TargetType;
+  /** Whether this request originated from the extension or the page */
+  source: 'extension' | 'page' | 'unknown';
+  /** Which scenario phase was active when this request was made */
+  phase?: string;
   flagged: boolean;
   flagReasons: string[];
   canaryDetections: CanaryDetection[];
@@ -53,6 +57,8 @@ export interface ApiCall {
   args: unknown[];
   returnValueSummary?: string;
   callerContext: TargetType;
+  /** Which scenario phase was active when this call was made */
+  phase?: string;
   relatedEvents: string[];
 }
 
@@ -93,4 +99,6 @@ export interface ConsoleEntry {
   text: string;
   url?: string;
   lineNumber?: number;
+  /** Which scenario phase was active when this entry was logged */
+  phase?: string;
 }

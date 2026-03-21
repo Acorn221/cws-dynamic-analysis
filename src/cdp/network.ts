@@ -1,10 +1,47 @@
 import type { CDPSession } from 'puppeteer';
 import type { NetworkRequest, TargetType } from '../types/events.js';
+import type { PhaseTracker } from '../scenario/phase-tracker.js';
 import { logger } from '../logger.js';
 
 const log = logger.child({ component: 'network' });
 
 export type NetworkEventHandler = (request: NetworkRequest) => void;
+
+/**
+ * Determine whether a network request originated from the extension or the page.
+ */
+function detectSource(
+  targetType: TargetType,
+  initiatorUrl?: string,
+  stackTrace?: string,
+): 'extension' | 'page' | 'unknown' {
+  // Service workers and background pages are always extension context
+  if (targetType === 'service_worker' || targetType === 'background_page') {
+    return 'extension';
+  }
+
+  // Check initiator URL for chrome-extension:// scheme
+  if (initiatorUrl && initiatorUrl.startsWith('chrome-extension://')) {
+    return 'extension';
+  }
+
+  // Check stack trace for chrome-extension:// references
+  if (stackTrace && stackTrace.includes('chrome-extension://')) {
+    return 'extension';
+  }
+
+  // Popup and content_script contexts are extension-originated
+  if (targetType === 'popup' || targetType === 'content_script') {
+    return 'extension';
+  }
+
+  // Page target with no extension signals → page traffic
+  if (targetType === 'page') {
+    return 'page';
+  }
+
+  return 'unknown';
+}
 
 /**
  * Enable network monitoring on a CDP session.
@@ -14,6 +51,7 @@ export async function enableNetworkMonitoring(
   session: CDPSession,
   targetType: TargetType,
   onEvent: NetworkEventHandler,
+  phaseTracker?: PhaseTracker,
 ): Promise<void> {
   const pendingRequests = new Map<string, Partial<NetworkRequest>>();
 
@@ -23,6 +61,12 @@ export async function enableNetworkMonitoring(
   });
 
   session.on('Network.requestWillBeSent', (params: any) => {
+    const initiatorUrl: string | undefined = params.initiator?.url;
+    const stackTrace: string | undefined = params.initiator?.stack?.callFrames
+      ?.slice(0, 3)
+      .map((f: any) => `${f.functionName}@${f.url}:${f.lineNumber}`)
+      .join(' → ');
+
     const req: Partial<NetworkRequest> = {
       id: params.requestId,
       timestamp: new Date(params.wallTime * 1000).toISOString(),
@@ -32,14 +76,13 @@ export async function enableNetworkMonitoring(
       bodySize: params.request.postDataLength,
       bodyPreview: params.request.postData?.slice(0, 2000),
       targetType,
+      source: detectSource(targetType, initiatorUrl, stackTrace),
+      phase: phaseTracker?.current,
       initiator: {
         type: params.initiator?.type ?? 'other',
-        url: params.initiator?.url,
+        url: initiatorUrl,
         lineNumber: params.initiator?.lineNumber,
-        stackTrace: params.initiator?.stack?.callFrames
-          ?.slice(0, 3)
-          .map((f: any) => `${f.functionName}@${f.url}:${f.lineNumber}`)
-          .join(' → '),
+        stackTrace,
       },
       flagged: false,
       flagReasons: [],
@@ -89,6 +132,8 @@ export async function enableNetworkMonitoring(
       url: params.url,
       method: 'WS_CONNECT',
       targetType,
+      source: detectSource(targetType),
+      phase: phaseTracker?.current,
       initiator: { type: 'script' },
       headers: {},
       flagged: true,

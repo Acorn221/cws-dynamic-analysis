@@ -63,7 +63,7 @@ export async function launchBrowser(
     (t) =>
       t.type() === 'service_worker' &&
       t.url().startsWith('chrome-extension://'),
-    { timeout: 15_000 },
+    { timeout: 30_000 },
   );
 
   // Extract extension ID from the service worker URL

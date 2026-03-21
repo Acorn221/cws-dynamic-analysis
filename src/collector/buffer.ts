@@ -71,11 +71,20 @@ export class EventBuffer {
 
   /** Summary stats for the LLM summarizer */
   getStats() {
+    const extensionCalls = this.apiCalls.filter(
+      (c) => c.callerContext === 'service_worker' || c.api.startsWith('chrome.'),
+    );
+    const pageCalls = this.apiCalls.filter(
+      (c) => c.callerContext !== 'service_worker' && !c.api.startsWith('chrome.'),
+    );
     return {
       totalNetworkRequests: this.networkRequests.length,
+      extensionRequests: this.networkRequests.filter((r) => r.source === 'extension').length,
       externalDomains: this.getExternalDomains(),
       flaggedRequests: this.getFlaggedRequests().length,
       totalApiCalls: this.apiCalls.length,
+      extensionApiCalls: extensionCalls.length,
+      pageApiCalls: pageCalls.length,
       apiCallsByNamespace: this.apiCalls.reduce(
         (acc, c) => {
           const ns = c.api.split('.').slice(0, 2).join('.');

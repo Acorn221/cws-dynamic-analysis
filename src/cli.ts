@@ -10,6 +10,8 @@
  *   5. Check canary:    node dist/cli.js query canary ./output/ext-id
  *   6. List hooks:      node dist/cli.js query hooks ./output/ext-id --api chrome.cookies
  *   7. List domains:    node dist/cli.js query domains ./output/ext-id
+ *   8. Console logs:    node dist/cli.js query console ./output/ext-id --level error
+ *   9. Manifest info:   node dist/cli.js query manifest ./output/ext-id
  */
 import { Command } from 'commander';
 import { resolve } from 'node:path';
@@ -23,6 +25,8 @@ import {
   queryHooks,
   queryCanary,
   queryDomains,
+  queryConsole,
+  queryManifest,
   loadContext,
 } from './query.js';
 
@@ -54,6 +58,7 @@ program
     '  summary.json    — Run metadata, stats, timing\n' +
     '  stats.json      — Event counts by category\n' +
     '  llm_summary.md  — Formatted summary for LLM consumption\n' +
+    '  console.json    — Console log entries from extension and page\n' +
     '  *.jsonl         — Raw event stream (network requests, API hooks)',
   )
   .argument('<extension-path>', 'Path to unpacked extension directory (must contain manifest.json)')
@@ -132,23 +137,29 @@ query
   .command('network')
   .description(
     'List network requests from the analysis run.\n' +
-    'Shows: id, method, url, status, flags, canary detections.\n\n' +
+    'Shows: id, method, url, status, source, phase, flags, canary detections.\n\n' +
     'Examples:\n' +
-    '  query network ./output/ext-id                  # all requests (limit 50)\n' +
-    '  query network ./output/ext-id --flagged         # suspicious only\n' +
-    '  query network ./output/ext-id --domain evil.com  # filter by domain\n' +
-    '  query network ./output/ext-id --method POST      # POST requests only',
+    '  query network ./output/ext-id                          # all requests (limit 50)\n' +
+    '  query network ./output/ext-id --flagged                 # suspicious only\n' +
+    '  query network ./output/ext-id --domain evil.com          # filter by domain\n' +
+    '  query network ./output/ext-id --method POST              # POST requests only\n' +
+    '  query network ./output/ext-id --source extension         # extension-originated only\n' +
+    '  query network ./output/ext-id --phase login              # requests during login phase',
   )
   .argument('<output-dir>', 'Path to analysis output directory')
   .option('--domain <domain>', 'Filter by domain substring')
   .option('--method <method>', 'Filter by HTTP method (GET, POST, etc.)')
   .option('--flagged', 'Only show flagged/suspicious requests', false)
+  .option('--source <source>', 'Filter by source (extension, page, unknown)')
+  .option('--phase <phase>', 'Filter by scenario phase (install, browse, login, banking, etc.)')
   .option('--limit <n>', 'Max results', '50')
   .action(async (outputDir: string, opts: any) => {
     const results = await queryNetwork(resolve(outputDir), {
       domain: opts.domain,
       method: opts.method,
       flaggedOnly: opts.flagged,
+      source: opts.source,
+      phase: opts.phase,
       limit: parseInt(opts.limit, 10),
     });
     console.log(JSON.stringify(results, null, 2));
@@ -180,17 +191,22 @@ query
     'List chrome.* API calls and page hook callbacks.\n' +
     'Shows: api name, arguments, return value, caller context.\n\n' +
     'Examples:\n' +
-    '  query hooks ./output/ext-id                        # all hooks\n' +
-    '  query hooks ./output/ext-id --api chrome.cookies    # cookie API only\n' +
-    '  query hooks ./output/ext-id --api chrome.tabs       # tab enumeration\n' +
-    '  query hooks ./output/ext-id --api chrome.history    # history access',
+    '  query hooks ./output/ext-id                            # all hooks\n' +
+    '  query hooks ./output/ext-id --api chrome.cookies        # cookie API only\n' +
+    '  query hooks ./output/ext-id --api chrome.tabs           # tab enumeration\n' +
+    '  query hooks ./output/ext-id --source service_worker     # SW calls only\n' +
+    '  query hooks ./output/ext-id --unique                    # deduplicated by API name',
   )
   .argument('<output-dir>', 'Path to analysis output directory')
   .option('--api <name>', 'Filter by API namespace (e.g., chrome.cookies, page.fetch)')
+  .option('--source <source>', 'Filter by caller context (service_worker, page, etc.)')
+  .option('--unique', 'Deduplicate by API name, show call count per API', false)
   .option('--limit <n>', 'Max results', '100')
   .action(async (outputDir: string, opts: any) => {
     const results = await queryHooks(resolve(outputDir), {
       api: opts.api,
+      source: opts.source,
+      unique: opts.unique,
       limit: parseInt(opts.limit, 10),
     });
     console.log(JSON.stringify(results, null, 2));
@@ -227,6 +243,49 @@ query
   .action(async (outputDir: string) => {
     const results = await queryDomains(resolve(outputDir));
     console.log(JSON.stringify(results, null, 2));
+  });
+
+// --- query console ---
+query
+  .command('console')
+  .description(
+    'List console log entries from the analysis run.\n' +
+    'Reads from console.json written at the end of analysis.\n\n' +
+    'Examples:\n' +
+    '  query console ./output/ext-id                          # all entries (limit 100)\n' +
+    '  query console ./output/ext-id --level error             # errors only\n' +
+    '  query console ./output/ext-id --source extension        # extension logs only\n' +
+    '  query console ./output/ext-id --level warn --limit 20   # first 20 warnings',
+  )
+  .argument('<output-dir>', 'Path to analysis output directory')
+  .option('--level <level>', 'Filter by level (error, warn, log, debug, info, all)', 'all')
+  .option('--source <source>', 'Filter by source (extension, page, hook)')
+  .option('--limit <n>', 'Max results', '100')
+  .action(async (outputDir: string, opts: any) => {
+    const results = await queryConsole(resolve(outputDir), {
+      level: opts.level,
+      source: opts.source,
+      limit: parseInt(opts.limit, 10),
+    });
+    console.log(JSON.stringify(results, null, 2));
+    if (results.length === 0) {
+      console.error('No console entries matching filters.');
+    } else {
+      console.error(`${results.length} console entries returned.`);
+    }
+  });
+
+// --- query manifest ---
+query
+  .command('manifest')
+  .description(
+    'Show extension metadata and run configuration from summary.json.\n' +
+    'Includes: extension ID, run timing, scenario config, network/API stats.',
+  )
+  .argument('<output-dir>', 'Path to analysis output directory')
+  .action(async (outputDir: string) => {
+    const result = await queryManifest(resolve(outputDir));
+    console.log(JSON.stringify(result, null, 2));
   });
 
 // --- query summary ---

@@ -42,29 +42,13 @@ export async function rewriteExtension(
     await readFile(join(outputPath, 'manifest.json'), 'utf-8'),
   );
 
-  const bgScript = getBackgroundScript(manifest);
-  if (!bgScript) {
-    log.warn('No background script found in manifest — skipping rewrite');
-    return outputPath;
-  }
-
-  const bgPath = join(outputPath, bgScript);
-
-  // Verify the background script exists
-  try {
-    await stat(bgPath);
-  } catch {
-    log.warn({ file: bgScript }, 'Background script not found on disk — skipping rewrite');
-    return outputPath;
-  }
+  // Note: We do NOT rewrite the background/service worker script.
+  // SW hooks use console.log('[CWS_HOOK]', ...) which requires CDP
+  // Runtime.enable to be active. Since CDP attaches AFTER the SW starts,
+  // source-rewritten hooks would fire before CDP is listening.
+  // Instead, SW hooks are injected via Runtime.evaluate at CDP attach time.
 
   const hooksDir = findHooksDir();
-  const hookCode = await readFile(join(hooksDir, 'sw-hooks.js'), 'utf-8');
-  const original = await readFile(bgPath, 'utf-8');
-
-  // Prepend hooks wrapped in an IIFE to avoid polluting scope
-  await writeFile(bgPath, hookCode + '\n;\n' + original);
-  log.info({ file: bgScript }, 'Injected hooks into background script');
 
   // Also inject page hooks into content scripts if they exist
   const contentScripts = manifest.content_scripts ?? [];

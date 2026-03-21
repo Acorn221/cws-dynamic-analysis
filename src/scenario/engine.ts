@@ -4,18 +4,21 @@
  */
 import type { Page } from 'puppeteer';
 import type { ScenarioConfig, PhaseId, CanaryConfig } from '../types/config.js';
+import type { PhaseTracker } from './phase-tracker.js';
 import { logger } from '../logger.js';
 
 const log = logger.child({ component: 'scenario' });
 
 /**
  * Execute the full scenario sequence on the given page.
+ * Updates phaseTracker.current so event handlers know which phase is active.
  */
 export async function runScenario(
   page: Page,
   config: ScenarioConfig,
   canary: CanaryConfig,
   canaryPort: number,
+  phaseTracker?: PhaseTracker,
 ): Promise<void> {
   const startTime = Date.now();
   const canaryBase = `http://127.0.0.1:${canaryPort}`;
@@ -27,6 +30,7 @@ export async function runScenario(
       break;
     }
 
+    if (phaseTracker) phaseTracker.current = phaseId;
     const phaseDuration = config.phaseDurations[phaseId] ?? 60;
     log.info({ phaseId, phaseDuration }, 'Starting phase');
 

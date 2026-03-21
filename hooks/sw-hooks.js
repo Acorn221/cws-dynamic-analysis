@@ -1,22 +1,20 @@
 /**
- * Service worker hooks — injected via Runtime.evaluate while SW is paused.
+ * Service worker hooks — prepended to background.js via source rewriting,
+ * or injected via Runtime.evaluate while SW is paused.
  * Wraps chrome.* APIs with Proxy-based logging.
- * Reports to Node via __cwsSWHook__ binding.
+ * Reports to Node via console.log with [CWS_HOOK] prefix, which is picked
+ * up by Runtime.consoleAPICalled listener on the CDP session.
  */
 (function () {
   'use strict';
 
   function report(api, args, result) {
-    try {
-      __cwsSWHook__(JSON.stringify({
-        api,
-        args: summarize(args),
-        result: summarize(result),
-        ts: Date.now(),
-      }));
-    } catch {
-      // Binding may not be ready
-    }
+    console.log('[CWS_HOOK]', JSON.stringify({
+      api,
+      args: summarize(args),
+      result: summarize(result),
+      ts: Date.now(),
+    }));
   }
 
   /** Safely summarize a value for logging (avoid circular refs, huge objects) */
@@ -177,4 +175,28 @@
       wrapEvent(chrome.webRequest.onCompleted, 'chrome.webRequest.onCompleted');
     }
   }
+
+  // --- chrome.webNavigation ---
+  if (typeof chrome !== 'undefined' && chrome.webNavigation) {
+    if (chrome.webNavigation.onBeforeNavigate) {
+      wrapEvent(chrome.webNavigation.onBeforeNavigate, 'chrome.webNavigation.onBeforeNavigate');
+    }
+    if (chrome.webNavigation.onCompleted) {
+      wrapEvent(chrome.webNavigation.onCompleted, 'chrome.webNavigation.onCompleted');
+    }
+  }
+
+  // --- chrome.notifications ---
+  if (typeof chrome !== 'undefined' && chrome.notifications) {
+    wrapMethod(chrome.notifications, 'chrome.notifications', 'create');
+  }
+
+  // Diagnostic: confirm hooks loaded (this fires once at load time,
+  // but will only be captured if CDP Runtime.enable is active)
+  console.log('[CWS_HOOK]', JSON.stringify({
+    api: '_hooks.loaded',
+    args: { timestamp: Date.now() },
+    result: null,
+    ts: Date.now(),
+  }));
 })();

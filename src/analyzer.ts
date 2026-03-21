@@ -2,7 +2,7 @@
  * Core analysis pipeline — orchestrates the full e2e flow:
  * Launch browser → instrument → run scenarios → collect → detect → summarize → output
  */
-import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, writeFile, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Browser, Page, CDPSession, Target } from 'puppeteer';
@@ -15,6 +15,7 @@ import {
   onServiceWorkerHookCallback,
 } from './cdp/hooks.js';
 import { injectTimeOverride, accelerateAlarms } from './scenario/time-accel.js';
+import { createPhaseTracker, type PhaseTracker } from './scenario/phase-tracker.js';
 import { EventBuffer } from './collector/buffer.js';
 import { JsonlWriter } from './collector/jsonl-writer.js';
 import { Detector } from './collector/detector.js';
@@ -39,6 +40,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
   const startedAt = new Date().toISOString();
   const buffer = new EventBuffer();
   const detector = new Detector(config.canary);
+  const phaseTracker = createPhaseTracker();
 
   await mkdir(config.outputDir, { recursive: true });
 
@@ -48,15 +50,15 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
   log.info({ port: canaryPort }, 'Canary server started');
 
   let browser: Browser | null = null;
-  // JSONL path is set after we know the extension ID
-  let jsonlPath = '';
   let jsonl: JsonlWriter | null = null;
+  let jsonlPath = '';
   let rewrittenPath: string | null = null;
+  const sourceRewritten = config.instrument !== false;
 
   try {
     // 0. Optionally rewrite extension source to inject hooks
     let extensionLoadPath = config.extensionPath;
-    if (config.instrument !== false) {
+    if (sourceRewritten) {
       rewrittenPath = join(tmpdir(), `cws-da-${config.runId}`);
       log.info('Rewriting extension source to inject hooks...');
       extensionLoadPath = await rewriteExtension(config.extensionPath, rewrittenPath);
@@ -64,45 +66,72 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
 
     // 1. Launch browser with extension
     log.info('Launching browser...');
-    const { browser: b, extensionId, browserSession } = await launchBrowser(
+    const { browser: b, extensionId } = await launchBrowser(
       extensionLoadPath,
       config.browser,
     );
     browser = b;
 
-    // Update config with detected extension ID
     if (config.extensionId === 'unknown') {
       config.extensionId = extensionId;
     }
     log.info({ extensionId: config.extensionId }, 'Browser launched, extension loaded');
 
-    // Now we know the ID — create the JSONL writer
-    jsonlPath = join(config.outputDir, `${config.extensionId}_${config.runId}.jsonl`);
+    // Deterministic JSONL filename: events.jsonl (no UUID)
+    jsonlPath = join(config.outputDir, 'events.jsonl');
     jsonl = new JsonlWriter(jsonlPath);
     await jsonl.open();
+
+    // Save manifest for query manifest command
+    try {
+      const manifest = await readFile(join(config.extensionPath, 'manifest.json'), 'utf-8');
+      await writeFile(join(config.outputDir, 'manifest.json'), manifest);
+    } catch { /* manifest may not be readable */ }
 
     // 2. Find and instrument the service worker
     const swTarget = await browser.waitForTarget(
       (t: Target) =>
         t.type() === 'service_worker' &&
         t.url().startsWith('chrome-extension://'),
-      { timeout: 10_000 },
+      { timeout: 30_000 },
     );
 
     const swCdp = await swTarget.createCDPSession();
 
-    // Enable network monitoring on service worker
+    // Enable network monitoring on service worker (with phase tracker)
     await enableNetworkMonitoring(swCdp, 'service_worker', (req: NetworkRequest) => {
+      req.phase = phaseTracker.current;
       detector.scan(req);
       for (const cd of req.canaryDetections) {
         buffer.addCanaryDetection(cd);
       }
       buffer.addNetworkRequest(req);
       jsonl?.write({ type: 'network', ...req });
+    }, phaseTracker);
+
+    // Capture SW console messages (separate from page console)
+    // @ts-ignore — CDPSession event type
+swCdp.on('Runtime.consoleAPICalled', (event: any) => {
+      // Skip our own hook messages (handled by onServiceWorkerHookCallback)
+      const firstArg = event.args?.[0];
+      if (firstArg?.value === '[CWS_HOOK]') return;
+
+      const text = (event.args ?? [])
+        .map((a: any) => a.value ?? a.description ?? '')
+        .join(' ');
+      buffer.addConsoleEntry({
+        timestamp: new Date().toISOString(),
+        level: event.type === 'error' ? 'error' : event.type === 'warning' ? 'warn' : 'log',
+        source: 'extension',
+        text,
+        phase: phaseTracker.current,
+      });
     });
 
-    // Inject chrome.* API hooks into service worker
-    await injectServiceWorkerHooks(swCdp);
+    // Inject chrome.* API hooks into service worker via Runtime.evaluate
+    // (must happen after Runtime.enable so console.log events are captured)
+    await injectServiceWorkerHooks(swCdp, false);
+
     onServiceWorkerHookCallback(swCdp, (data: any) => {
       const call: ApiCall = {
         id: buffer.nextId(),
@@ -112,6 +141,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
         returnValueSummary: data.result != null ? JSON.stringify(data.result).slice(0, 200) : undefined,
         callerContext: 'service_worker',
         relatedEvents: [],
+        phase: phaseTracker.current,
       };
       buffer.addApiCall(call);
       jsonl?.write({ type: 'api_call', ...call });
@@ -136,7 +166,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     const pages = await browser.pages();
     const page = pages[0] ?? await browser.newPage();
 
-    await instrumentPage(page, buffer, detector, jsonl!);
+    await instrumentPage(page, buffer, detector, jsonl!, phaseTracker);
 
     // Instrument any new pages that open during the scenario
     browser.on('targetcreated', async (target: Target) => {
@@ -144,7 +174,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
         try {
           const newPage = await target.page();
           if (newPage) {
-            await instrumentPage(newPage, buffer, detector, jsonl!);
+            await instrumentPage(newPage, buffer, detector, jsonl!, phaseTracker);
           }
         } catch (err) {
           log.debug({ err }, 'Failed to instrument new page target');
@@ -152,9 +182,10 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       }
     });
 
-    // 4. Run the scenario
+    // 4. Run the scenario (engine updates phaseTracker.current)
     log.info('Starting scenario...');
-    await runScenario(page, config.scenario, config.canary, canaryPort);
+    await runScenario(page, config.scenario, config.canary, canaryPort, phaseTracker);
+    phaseTracker.current = 'post';
     log.info('Scenario complete');
 
     // 5. Post-processing
@@ -180,7 +211,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
         phasesRun: config.scenario.phases,
         totalDurationSeconds: durationSeconds,
         sitesVisited: config.scenario.browsingSites,
-        formsInteracted: 3, // login, banking, checkout
+        formsInteracted: 3,
         timeAccelerated: config.scenario.timeAcceleration,
       },
       networkStats: {
@@ -203,38 +234,28 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     };
 
     // 6. Write results
-    await writeFile(
-      join(config.outputDir, 'summary.json'),
-      JSON.stringify(summary, null, 2),
-    );
-    await writeFile(
-      join(config.outputDir, 'llm_summary.md'),
-      llmSummary,
-    );
-    await writeFile(
-      join(config.outputDir, 'stats.json'),
-      JSON.stringify(stats, null, 2),
-    );
+    await writeFile(join(config.outputDir, 'summary.json'), JSON.stringify(summary, null, 2));
+    await writeFile(join(config.outputDir, 'llm_summary.md'), llmSummary);
+    await writeFile(join(config.outputDir, 'stats.json'), JSON.stringify(stats, null, 2));
+    await writeFile(join(config.outputDir, 'console.json'), JSON.stringify(buffer.consoleEntries, null, 2));
 
     await jsonl?.close();
 
-    // Print results
     log.info('=== ANALYSIS COMPLETE ===');
     log.info({
       extensionId: config.extensionId,
       duration: `${durationSeconds}s`,
       networkRequests: stats.totalNetworkRequests,
+      extensionRequests: stats.extensionRequests,
       externalDomains: stats.externalDomains.length,
       flaggedRequests: stats.flaggedRequests,
-      apiCalls: stats.totalApiCalls,
+      extensionApiCalls: stats.extensionApiCalls,
+      pageApiCalls: stats.pageApiCalls,
       canaryDetections: stats.canaryDetections,
     }, 'Results');
 
     if (stats.canaryDetections > 0) {
-      log.warn(
-        { detections: buffer.canaryDetections },
-        '🚨 CANARY DATA EXFILTRATION DETECTED',
-      );
+      log.warn({ detections: buffer.canaryDetections }, 'CANARY DATA EXFILTRATION DETECTED');
     }
 
     return { summary, llmSummary, outputDir: config.outputDir };
@@ -252,36 +273,18 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
         (new Date(finishedAt).getTime() - new Date(startedAt).getTime()) / 1000,
       ),
       status: 'failed',
-      scenarioConfig: {
-        phasesRun: [],
-        totalDurationSeconds: 0,
-        sitesVisited: [],
-        formsInteracted: 0,
-        timeAccelerated: false,
-      },
-      networkStats: {
-        totalRequests: 0,
-        externalDomains: [],
-        flaggedRequests: 0,
-        blockedRequests: 0,
-        totalBytesOut: 0,
-        totalBytesIn: 0,
-      },
+      scenarioConfig: { phasesRun: [], totalDurationSeconds: 0, sitesVisited: [], formsInteracted: 0, timeAccelerated: false },
+      networkStats: { totalRequests: 0, externalDomains: [], flaggedRequests: 0, blockedRequests: 0, totalBytesOut: 0, totalBytesIn: 0 },
       apiHookStats: { totalCalls: 0, byApi: {}, sensitiveApis: [] },
       canaryDetections: 0,
       rawLogPath: jsonlPath,
     };
 
-    await writeFile(
-      join(config.outputDir, 'summary.json'),
-      JSON.stringify(summary, null, 2),
-    );
-
+    await writeFile(join(config.outputDir, 'summary.json'), JSON.stringify(summary, null, 2));
     throw err;
   } finally {
     if (browser) await closeBrowser(browser);
     await stopCanaryServer();
-    // Clean up rewritten extension copy
     if (rewrittenPath) {
       await rm(rewrittenPath, { recursive: true, force: true }).catch(() => {});
     }
@@ -294,21 +297,21 @@ async function instrumentPage(
   buffer: EventBuffer,
   detector: Detector,
   jsonl: JsonlWriter,
+  phaseTracker: PhaseTracker,
 ): Promise<void> {
   try {
     const cdp = await page.createCDPSession();
 
-    // Network monitoring
     await enableNetworkMonitoring(cdp, 'page', (req: NetworkRequest) => {
+      req.phase = phaseTracker.current;
       detector.scan(req);
       for (const cd of req.canaryDetections) {
         buffer.addCanaryDetection(cd);
       }
       buffer.addNetworkRequest(req);
       jsonl?.write({ type: 'network', ...req });
-    });
+    }, phaseTracker);
 
-    // Page-side hooks
     await injectPageHooks(page);
     page.on('cws:hook' as any, (data: any) => {
       const call: ApiCall = {
@@ -318,13 +321,15 @@ async function instrumentPage(
         args: [data.data],
         callerContext: 'page',
         relatedEvents: [],
+        phase: phaseTracker.current,
       };
       buffer.addApiCall(call);
       jsonl?.write({ type: 'page_hook', ...call });
     });
 
-    // Console log capture
     page.on('console', (msg) => {
+      // Skip our own hook messages
+      if (msg.text().startsWith('[CWS_HOOK]')) return;
       buffer.addConsoleEntry({
         timestamp: new Date().toISOString(),
         level: msg.type() === 'error' ? 'error' : (msg.type() as string) === 'warning' ? 'warn' : 'log',
@@ -332,6 +337,7 @@ async function instrumentPage(
         text: msg.text(),
         url: msg.location()?.url,
         lineNumber: msg.location()?.lineNumber,
+        phase: phaseTracker.current,
       });
     });
 
