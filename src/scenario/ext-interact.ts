@@ -61,48 +61,67 @@ export async function interactWithExtension(
 
   const client = new Anthropic({ apiKey: config.apiKey });
 
-  // Try popup first, then options page
-  const pagesToTry = [
-    `chrome-extension://${config.extensionId}/popup.html`,
-    `chrome-extension://${config.extensionId}/options.html`,
-    `chrome-extension://${config.extensionId}/index.html`,
-  ];
+  // Open extension pages by using chrome.tabs.create via the SW,
+  // because direct page.goto('chrome-extension://...') fails with
+  // ERR_FILE_NOT_FOUND on CWS-downloaded extensions in headless mode.
+  const pagePaths = ['popup.html', 'options.html'];
 
-  for (const pageUrl of pagesToTry) {
-    const page = await browser.newPage();
+  // Get the SW CDP session to create tabs
+  const swTarget = await browser.waitForTarget(
+    (t) => t.type() === 'service_worker' && t.url().includes(config.extensionId),
+    { timeout: 5000 },
+  ).catch(() => null);
+
+  for (const pagePath of pagePaths) {
+    let page: Page | null = null;
     try {
-      log.info({ url: pageUrl }, 'Opening extension page');
-      // Use 'load' not 'networkidle2' — Vue/React SPAs never go network-idle during render
-      const response = await page.goto(pageUrl, { waitUntil: 'load', timeout: 10000 }).catch(() => null);
+      if (swTarget) {
+        // Open via chrome.tabs.create (works reliably for extension pages)
+        const swCdp = await swTarget.createCDPSession();
+        await swCdp.send('Runtime.enable');
+        await swCdp.send('Runtime.evaluate', {
+          expression: `chrome.tabs.create({url: chrome.runtime.getURL('${pagePath}')})`,
+          awaitPromise: true,
+        });
+        await swCdp.detach().catch(() => {});
 
-      if (!response) {
-        log.debug({ url: pageUrl }, 'Navigation returned null, skipping');
-        await page.close().catch(() => {});
-        continue;
+        // Wait for the new tab to appear
+        await new Promise((r) => setTimeout(r, 3000));
+
+        // Find the newly opened extension page
+        const pages = await browser.pages();
+        page = pages.find((p) => p.url().includes(pagePath)) ?? null;
       }
 
-      // Wait for JS frameworks to render (Vue, React, etc.)
-      await page.evaluate(() => new Promise(r => setTimeout(r, 2500)));
+      if (!page) {
+        // Fallback: try direct navigation
+        page = await browser.newPage();
+        await page.goto(`chrome-extension://${config.extensionId}/${pagePath}`, {
+          waitUntil: 'load',
+          timeout: 8000,
+        }).catch(() => null);
+      }
 
-      // Check if the page has any meaningful content
+      if (!page) continue;
+
+      log.info({ url: page.url() }, 'Extension page opened');
+
+      // Wait for JS frameworks to render
+      await page.evaluate(() => new Promise((r) => setTimeout(r, 2500)));
+
       const elementCount = await page.evaluate(() => document.querySelectorAll('*').length).catch(() => 0);
       if (elementCount < 5) {
-        log.debug({ url: pageUrl, elementCount }, 'Page has too few elements, skipping');
-        await page.close().catch(() => {});
+        log.debug({ url: page.url(), elementCount }, 'Page has too few elements, skipping');
         continue;
       }
 
-      log.info({ url: pageUrl, elementCount }, 'Extension page loaded, starting interaction');
-      const turns = await runInteractionLoop(page, client, model, maxTurns, actions);
-      log.info({ url: pageUrl, turns, actions: actions.length }, 'Extension page interaction complete');
+      log.info({ url: page.url(), elementCount }, 'Extension page rendered, starting interaction');
+      await runInteractionLoop(page, client, model, maxTurns, actions);
+      log.info({ url: page.url(), actions: actions.length }, 'Extension page interaction complete');
     } catch (err: any) {
-      if (err.message?.includes('ERR_BLOCKED_BY_CLIENT') || err.message?.includes('net::ERR')) {
-        log.debug({ url: pageUrl }, 'Extension page not found, skipping');
-      } else {
-        log.warn({ url: pageUrl, err: err.message }, 'Extension interaction failed');
-      }
+      log.warn({ pagePath, err: err.message }, 'Extension page interaction failed');
     } finally {
-      await page.close().catch(() => {});
+      if (page) await page.close().catch(() => {});
     }
   }
 

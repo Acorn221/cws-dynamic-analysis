@@ -311,6 +311,81 @@ query
   });
 
 // ============================================================
+// INTERACT command group — agent-driven extension UI interaction
+// ============================================================
+import {
+  interactStart,
+  interactAction,
+  interactSnapshot,
+  interactStop,
+} from './interact.js';
+
+const interact = program
+  .command('interact')
+  .description(
+    'Drive extension popup/options UI via CLI commands.\n' +
+    'A Claude Code agent uses these to navigate onboarding flows.\n\n' +
+    'Workflow:\n' +
+    '  1. interact start <ext-path> -o ./session    → launches browser, opens popup, prints DOM\n' +
+    '  2. interact action ./session \'{"action":"click","selector":"#accept"}\'  → clicks, prints new DOM\n' +
+    '  3. interact snapshot ./session                → re-print current DOM\n' +
+    '  4. interact stop ./session                    → close browser\n' +
+    '  5. run <ext-path> -o ./results --no-instrument --phases browse,login,...  → run scenario',
+  );
+
+interact
+  .command('start')
+  .description('Launch Chrome with extension, open popup, print DOM snapshot.')
+  .argument('<extension-path>', 'Path to unpacked extension directory')
+  .option('-o, --output <dir>', 'Session directory', './interact-session')
+  .option('--chrome-path <path>', 'Chrome binary path')
+  .option('--headless', 'Run headless', false)
+  .action(async (extensionPath: string, opts: any) => {
+    const snapshot = await interactStart(resolve(extensionPath), resolve(opts.output), {
+      chromePath: opts.chromePath,
+      headless: opts.headless,
+    });
+    console.log(snapshot);
+  });
+
+interact
+  .command('action')
+  .description(
+    'Execute an action on the extension page and print new DOM.\n\n' +
+    'Action JSON format:\n' +
+    '  {"action":"click","selector":"#btn"}\n' +
+    '  {"action":"type","selector":"input","text":"hello"}\n' +
+    '  {"action":"scroll","direction":"down"}\n' +
+    '  {"action":"select","selector":"select","value":"opt1"}\n' +
+    '  {"action":"navigate","url":"chrome-extension://id/options.html"}',
+  )
+  .argument('<session-dir>', 'Session directory from interact start')
+  .argument('<action-json>', 'Action as JSON string')
+  .action(async (sessionDir: string, actionJson: string) => {
+    const action = JSON.parse(actionJson);
+    const snapshot = await interactAction(resolve(sessionDir), action);
+    console.log(snapshot);
+  });
+
+interact
+  .command('snapshot')
+  .description('Re-print the current DOM snapshot of the extension page.')
+  .argument('<session-dir>', 'Session directory from interact start')
+  .action(async (sessionDir: string) => {
+    const snapshot = await interactSnapshot(resolve(sessionDir));
+    console.log(snapshot);
+  });
+
+interact
+  .command('stop')
+  .description('Close the browser and end the interactive session.')
+  .argument('<session-dir>', 'Session directory from interact start')
+  .action(async (sessionDir: string) => {
+    await interactStop(resolve(sessionDir));
+    console.log('Session stopped.');
+  });
+
+// ============================================================
 // BATCH command
 // ============================================================
 program

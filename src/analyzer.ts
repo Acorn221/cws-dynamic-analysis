@@ -88,15 +88,24 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       await writeFile(join(config.outputDir, 'manifest.json'), manifest);
     } catch { /* manifest may not be readable */ }
 
-    // 2. Find and instrument the service worker
-    const swTarget = await browser.waitForTarget(
-      (t: Target) =>
-        t.type() === 'service_worker' &&
-        t.url().startsWith('chrome-extension://'),
-      { timeout: 30_000 },
-    );
+    // 2. Find the service worker (may already be running)
+    const swFilter = (t: Target) =>
+      t.type() === 'service_worker' && t.url().startsWith('chrome-extension://');
+    let swTarget = browser.targets().find(swFilter as any) as Target;
+    if (!swTarget) {
+      swTarget = await browser.waitForTarget(swFilter, { timeout: 30_000 });
+    }
 
     const swCdp = await swTarget.createCDPSession();
+
+    // Inject keep-alive to prevent SW from terminating during analysis.
+    // Must be done via CDP (not source rewriting) because CWS extensions
+    // have verified_contents.json that rejects modified files.
+    await swCdp.send('Runtime.enable');
+    await swCdp.send('Runtime.evaluate', {
+      expression: 'setInterval(()=>{},20000)',
+      awaitPromise: false,
+    });
 
     // Enable network monitoring on service worker (with phase tracker)
     await enableNetworkMonitoring(swCdp, 'service_worker', (req: NetworkRequest) => {

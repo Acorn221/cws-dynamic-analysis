@@ -58,13 +58,21 @@ export async function launchBrowser(
     },
   );
 
-  // Wait for extension service worker to appear
-  const swTarget = await browser.waitForTarget(
-    (t) =>
-      t.type() === 'service_worker' &&
-      t.url().startsWith('chrome-extension://'),
-    { timeout: 30_000 },
-  );
+  // Find extension service worker — check existing targets first,
+  // then wait for new ones if not found yet
+  const swFilter = (t: any) =>
+    t.type() === 'service_worker' && t.url().startsWith('chrome-extension://');
+
+  // Give Chrome a moment to register targets after launch
+  await new Promise((r) => setTimeout(r, 2000));
+
+  let swTarget = browser.targets().find(swFilter);
+  if (!swTarget) {
+    log.debug('SW not in existing targets, waiting...');
+    swTarget = await browser.waitForTarget(swFilter, { timeout: 30_000 });
+  } else {
+    log.debug('SW found in existing targets');
+  }
 
   // Extract extension ID from the service worker URL
   const extensionId = new URL(swTarget.url()).hostname;

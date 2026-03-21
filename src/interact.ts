@@ -1,0 +1,292 @@
+/**
+ * Interactive extension browser session — persistent browser that a
+ * Claude Code agent can drive via CLI commands.
+ *
+ * Flow:
+ *   interact start <ext-path>  → launches Chrome, opens popup, dumps DOM
+ *   interact action <dir> <json> → executes click/type/scroll, dumps new DOM
+ *   interact snapshot <dir>      → re-dump current DOM
+ *   interact stop <dir>          → close browser, write browser state
+ *
+ * The browser persists between calls via wsEndpoint saved to <dir>/session.json.
+ */
+import puppeteerExtra from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import puppeteer, { type Browser, type Page } from 'puppeteer';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { logger } from './logger.js';
+
+puppeteerExtra.use(StealthPlugin());
+
+const log = logger.child({ component: 'interact' });
+
+interface SessionState {
+  wsEndpoint: string;
+  extensionId: string;
+  extensionPath: string;
+  activePage?: string; // URL of the currently active extension page
+}
+
+async function saveSession(outputDir: string, state: SessionState): Promise<void> {
+  await writeFile(join(outputDir, 'session.json'), JSON.stringify(state, null, 2));
+}
+
+async function loadSession(outputDir: string): Promise<SessionState> {
+  return JSON.parse(await readFile(join(outputDir, 'session.json'), 'utf-8'));
+}
+
+/**
+ * Start a new interactive session — launch Chrome with the extension,
+ * open its popup, and return the DOM snapshot.
+ */
+export async function interactStart(
+  extensionPath: string,
+  outputDir: string,
+  opts: { chromePath?: string; headless?: boolean } = {},
+): Promise<string> {
+  await mkdir(outputDir, { recursive: true });
+
+  const browser = await puppeteer.launch({
+    headless: opts.headless ?? true,
+    ...(opts.chromePath ? { executablePath: opts.chromePath } : {}),
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+      '--no-sandbox',
+      '--no-first-run',
+      '--disable-default-apps',
+      '--disable-component-update',
+      '--disable-blink-features=AutomationControlled',
+    ],
+    defaultViewport: { width: 800, height: 600 },
+  });
+
+  // Wait for SW
+  await new Promise((r) => setTimeout(r, 2000));
+  const swFilter = (t: any) =>
+    t.type() === 'service_worker' && t.url().startsWith('chrome-extension://');
+  let swTarget = browser.targets().find(swFilter);
+  if (!swTarget) {
+    swTarget = await browser.waitForTarget(swFilter, { timeout: 30_000 });
+  }
+  const extensionId = new URL(swTarget!.url()).hostname;
+  log.info({ extensionId }, 'Extension loaded');
+
+  // Keep SW alive
+  const swCdp = await swTarget!.createCDPSession();
+  await swCdp.send('Runtime.enable');
+  await swCdp.send('Runtime.evaluate', {
+    expression: 'setInterval(()=>{},20000)',
+    awaitPromise: false,
+  });
+
+  // Save session
+  const wsEndpoint = browser.wsEndpoint();
+  await saveSession(outputDir, { wsEndpoint, extensionId, extensionPath });
+
+  // Open popup via chrome.tabs.create
+  await swCdp.send('Runtime.evaluate', {
+    expression: `chrome.tabs.create({url: chrome.runtime.getURL('popup.html')})`,
+    awaitPromise: true,
+  });
+  await new Promise((r) => setTimeout(r, 3000));
+
+  // Find the popup page
+  const pages = await browser.pages();
+  const popupPage = pages.find((p) => p.url().includes('popup.html'));
+  if (!popupPage) {
+    // Fallback: try options.html
+    await swCdp.send('Runtime.evaluate', {
+      expression: `chrome.tabs.create({url: chrome.runtime.getURL('options.html')})`,
+      awaitPromise: true,
+    });
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+
+  const activePage = (await browser.pages()).find(
+    (p) => p.url().includes(extensionId) && !p.url().includes('service_worker'),
+  );
+
+  if (activePage) {
+    await saveSession(outputDir, {
+      wsEndpoint,
+      extensionId,
+      extensionPath,
+      activePage: activePage.url(),
+    });
+  }
+
+  // Return DOM snapshot
+  return activePage ? await getSnapshot(activePage) : 'No extension page found.';
+}
+
+/**
+ * Execute an action on the active extension page and return new DOM snapshot.
+ */
+export async function interactAction(
+  outputDir: string,
+  action: { action: string; selector?: string; text?: string; value?: string; url?: string; direction?: string },
+): Promise<string> {
+  const session = await loadSession(outputDir);
+  const browser = await puppeteer.connect({ browserWSEndpoint: session.wsEndpoint });
+
+  const pages = await browser.pages();
+  const page = pages.find((p) => p.url().includes(session.extensionId)) ??
+    pages.find((p) => p.url().includes('popup.html') || p.url().includes('options.html'));
+
+  if (!page) return 'ERROR: No extension page found. Run `interact start` first.';
+
+  try {
+    switch (action.action) {
+      case 'click':
+        if (!action.selector) return 'ERROR: click requires selector';
+        await page.waitForSelector(action.selector, { timeout: 3000 });
+        await page.click(action.selector);
+        break;
+
+      case 'type':
+        if (!action.selector || !action.text) return 'ERROR: type requires selector and text';
+        await page.waitForSelector(action.selector, { timeout: 3000 });
+        await page.click(action.selector);
+        await page.type(action.selector, action.text, { delay: 50 });
+        break;
+
+      case 'select':
+        if (!action.selector || !action.value) return 'ERROR: select requires selector and value';
+        await page.select(action.selector, action.value);
+        break;
+
+      case 'scroll':
+        await page.evaluate((dir) => {
+          window.scrollBy(0, dir === 'up' ? -300 : 300);
+        }, action.direction ?? 'down');
+        break;
+
+      case 'navigate':
+        if (!action.url) return 'ERROR: navigate requires url';
+        await page.goto(action.url, { waitUntil: 'load', timeout: 10000 });
+        break;
+
+      default:
+        return `ERROR: Unknown action "${action.action}"`;
+    }
+  } catch (err: any) {
+    return `ACTION FAILED: ${err.message}\n\n${await getSnapshot(page)}`;
+  }
+
+  // Wait for re-render
+  await new Promise((r) => setTimeout(r, 1500));
+
+  return getSnapshot(page);
+}
+
+/**
+ * Get a DOM snapshot of the active extension page.
+ */
+export async function interactSnapshot(outputDir: string): Promise<string> {
+  const session = await loadSession(outputDir);
+  const browser = await puppeteer.connect({ browserWSEndpoint: session.wsEndpoint });
+  const pages = await browser.pages();
+  const page = pages.find((p) => p.url().includes(session.extensionId)) ??
+    pages.find((p) => p.url().includes('popup.html') || p.url().includes('options.html'));
+
+  if (!page) return 'ERROR: No extension page found.';
+  return getSnapshot(page);
+}
+
+/**
+ * Stop the interactive session — close the browser.
+ */
+export async function interactStop(outputDir: string): Promise<void> {
+  try {
+    const session = await loadSession(outputDir);
+    const browser = await puppeteer.connect({ browserWSEndpoint: session.wsEndpoint });
+    await browser.close();
+  } catch {
+    // Browser may already be closed
+  }
+}
+
+/**
+ * Simplified DOM snapshot for LLM consumption.
+ */
+async function getSnapshot(page: Page): Promise<string> {
+  const url = page.url();
+  const snapshot = await page.evaluate(() => {
+    const lines: string[] = [];
+    const seen = new Set<string>();
+
+    function getSel(el: Element): string {
+      if (el.id) return `#${el.id}`;
+      if (el.getAttribute('data-testid')) return `[data-testid="${el.getAttribute('data-testid')}"]`;
+      if (el.className && typeof el.className === 'string') {
+        const cls = el.className.trim().split(/\s+/).slice(0, 2).join('.');
+        if (cls) return `${el.tagName.toLowerCase()}.${cls}`;
+      }
+      const parent = el.parentElement;
+      if (parent) {
+        const idx = Array.from(parent.children).indexOf(el) + 1;
+        return `${getSel(parent)} > ${el.tagName.toLowerCase()}:nth-child(${idx})`;
+      }
+      return el.tagName.toLowerCase();
+    }
+
+    function getText(el: Element): string {
+      return (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    }
+
+    function isVis(el: Element): boolean {
+      const s = window.getComputedStyle(el);
+      return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+    }
+
+    const title = document.title;
+    if (title) lines.push(`Title: ${title}`);
+
+    document.querySelectorAll('h1, h2, h3').forEach((h) => {
+      const t = getText(h);
+      if (t) lines.push(`[${h.tagName}] ${t}`);
+    });
+
+    document.querySelectorAll('p, [class*="privacy"], [class*="terms"], [class*="consent"], [class*="description"], [class*="subtitle"]').forEach((p) => {
+      if (!isVis(p)) return;
+      const t = getText(p);
+      if (t && t.length > 10 && !seen.has(t.slice(0, 50))) {
+        seen.add(t.slice(0, 50));
+        lines.push(`[text] ${t}`);
+      }
+    });
+
+    document.querySelectorAll('button, a[href], input, select, textarea, [role="button"], [role="checkbox"], [role="switch"], label[for], [class*="toggle"], [class*="btn"]').forEach((el) => {
+      if (!isVis(el)) return;
+      const tag = el.tagName.toLowerCase();
+      const type = el.getAttribute('type') ?? '';
+      const text = getText(el);
+      const sel = getSel(el);
+      const checked = (el as HTMLInputElement).checked;
+      const disabled = (el as HTMLButtonElement).disabled;
+      const ph = el.getAttribute('placeholder') ?? '';
+
+      if (!text && !ph && tag !== 'input') return;
+
+      let d = `[${tag}`;
+      if (type) d += ` type="${type}"`;
+      if (checked !== undefined && tag === 'input' && (type === 'checkbox' || type === 'radio')) d += checked ? ' CHECKED' : ' unchecked';
+      if (disabled) d += ' DISABLED';
+      d += `]`;
+      if (text) d += ` "${text}"`;
+      if (ph) d += ` placeholder="${ph}"`;
+      d += `  →  ${sel}`;
+
+      if (!seen.has(d.slice(0, 80))) {
+        seen.add(d.slice(0, 80));
+        lines.push(d);
+      }
+    });
+
+    return lines.slice(0, 60).join('\n');
+  });
+
+  return `URL: ${url}\nElements: ${await page.evaluate(() => document.querySelectorAll('*').length)}\n\n${snapshot}`;
+}
