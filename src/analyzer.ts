@@ -12,6 +12,7 @@ import {
   injectServiceWorkerHooks,
   onServiceWorkerHookCallback,
 } from './cdp/hooks.js';
+import { injectTimeOverride, accelerateAlarms } from './scenario/time-accel.js';
 import { EventBuffer } from './collector/buffer.js';
 import { JsonlWriter } from './collector/jsonl-writer.js';
 import { Detector } from './collector/detector.js';
@@ -36,11 +37,8 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
   const startedAt = new Date().toISOString();
   const buffer = new EventBuffer();
   const detector = new Detector(config.canary);
-  const jsonlPath = join(config.outputDir, `${config.extensionId}_${config.runId}.jsonl`);
 
   await mkdir(config.outputDir, { recursive: true });
-  const jsonl = new JsonlWriter(jsonlPath);
-  await jsonl.open();
 
   // Start canary page server
   const canaryPort = 3200;
@@ -48,6 +46,9 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
   log.info({ port: canaryPort }, 'Canary server started');
 
   let browser: Browser | null = null;
+  // JSONL path is set after we know the extension ID
+  let jsonlPath = '';
+  let jsonl: JsonlWriter | null = null;
 
   try {
     // 1. Launch browser with extension
@@ -62,7 +63,12 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     if (config.extensionId === 'unknown') {
       config.extensionId = extensionId;
     }
-    log.info({ extensionId }, 'Browser launched, extension loaded');
+    log.info({ extensionId: config.extensionId }, 'Browser launched, extension loaded');
+
+    // Now we know the ID — create the JSONL writer
+    jsonlPath = join(config.outputDir, `${config.extensionId}_${config.runId}.jsonl`);
+    jsonl = new JsonlWriter(jsonlPath);
+    await jsonl.open();
 
     // 2. Find and instrument the service worker
     const swTarget = await browser.waitForTarget(
@@ -81,7 +87,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
         buffer.addCanaryDetection(cd);
       }
       buffer.addNetworkRequest(req);
-      jsonl.write({ type: 'network', ...req });
+      jsonl?.write({ type: 'network', ...req });
     });
 
     // Inject chrome.* API hooks into service worker
@@ -97,8 +103,21 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
         relatedEvents: [],
       };
       buffer.addApiCall(call);
-      jsonl.write({ type: 'api_call', ...call });
+      jsonl?.write({ type: 'api_call', ...call });
     });
+
+    // Inject time acceleration if enabled
+    if (config.scenario.timeAcceleration) {
+      try {
+        await accelerateAlarms(swCdp);
+        for (const jump of config.scenario.timeJumps) {
+          await injectTimeOverride(swCdp, jump);
+        }
+        log.info({ timeJumps: config.scenario.timeJumps }, 'Time acceleration injected');
+      } catch (err) {
+        log.warn({ err }, 'Time acceleration injection failed (non-fatal)');
+      }
+    }
 
     log.info('Service worker instrumented');
 
@@ -106,7 +125,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     const pages = await browser.pages();
     const page = pages[0] ?? await browser.newPage();
 
-    await instrumentPage(page, buffer, detector, jsonl);
+    await instrumentPage(page, buffer, detector, jsonl!);
 
     // Instrument any new pages that open during the scenario
     browser.on('targetcreated', async (target: Target) => {
@@ -114,7 +133,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
         try {
           const newPage = await target.page();
           if (newPage) {
-            await instrumentPage(newPage, buffer, detector, jsonl);
+            await instrumentPage(newPage, buffer, detector, jsonl!);
           }
         } catch (err) {
           log.debug({ err }, 'Failed to instrument new page target');
@@ -186,7 +205,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       JSON.stringify(stats, null, 2),
     );
 
-    await jsonl.close();
+    await jsonl?.close();
 
     // Print results
     log.info('=== ANALYSIS COMPLETE ===');
@@ -210,7 +229,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     return { summary, llmSummary, outputDir: config.outputDir };
   } catch (err) {
     log.error({ err }, 'Analysis failed');
-    await jsonl.close();
+    await jsonl?.close();
 
     const finishedAt = new Date().toISOString();
     const summary: RunSummary = {
@@ -271,7 +290,7 @@ async function instrumentPage(
         buffer.addCanaryDetection(cd);
       }
       buffer.addNetworkRequest(req);
-      jsonl.write({ type: 'network', ...req });
+      jsonl?.write({ type: 'network', ...req });
     });
 
     // Page-side hooks
@@ -286,7 +305,7 @@ async function instrumentPage(
         relatedEvents: [],
       };
       buffer.addApiCall(call);
-      jsonl.write({ type: 'page_hook', ...call });
+      jsonl?.write({ type: 'page_hook', ...call });
     });
 
     // Console log capture

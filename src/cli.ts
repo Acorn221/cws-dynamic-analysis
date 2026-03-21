@@ -1,92 +1,250 @@
 #!/usr/bin/env node
+/**
+ * cws-dynamic-analyze — Automated dynamic analysis of Chrome extensions via CDP.
+ *
+ * USAGE FOR LLM AGENTS:
+ *   1. Run analysis:    node dist/cli.js run <extension-dir> --headless -o ./output/ext-id
+ *   2. Read summary:    cat ./output/ext-id/llm_summary.md
+ *   3. Query details:   node dist/cli.js query network ./output/ext-id --flagged
+ *   4. Get request:     node dist/cli.js query request ./output/ext-id <request-id>
+ *   5. Check canary:    node dist/cli.js query canary ./output/ext-id
+ *   6. List hooks:      node dist/cli.js query hooks ./output/ext-id --api chrome.cookies
+ *   7. List domains:    node dist/cli.js query domains ./output/ext-id
+ */
 import { Command } from 'commander';
 import { resolve } from 'node:path';
-import { stat } from 'node:fs/promises';
+import { stat, readFile } from 'node:fs/promises';
 import { logger } from './logger.js';
-import { defaultConfig } from './types/config.js';
+import { defaultConfig, type PhaseId } from './types/config.js';
 import { analyze } from './analyzer.js';
+import {
+  queryNetwork,
+  queryRequestDetail,
+  queryHooks,
+  queryCanary,
+  queryDomains,
+  loadContext,
+} from './query.js';
 
 const program = new Command();
 
 program
   .name('cws-dynamic-analyze')
-  .description('Dynamic analysis of Chrome extensions via CDP')
+  .description(
+    'Automated dynamic analysis of Chrome extensions via CDP.\n\n' +
+    'Launches Chrome with an extension, runs browsing scenarios with canary data,\n' +
+    'monitors network requests and chrome.* API calls, detects data exfiltration.\n\n' +
+    'LLM AGENT WORKFLOW:\n' +
+    '  1. run  — Analyze extension, produces summary + JSONL event log\n' +
+    '  2. Read llm_summary.md for overview\n' +
+    '  3. query — Drill into specific events, requests, or API calls',
+  )
   .version('0.1.0');
 
+// ============================================================
+// RUN command
+// ============================================================
 program
   .command('run')
-  .description('Analyze a single extension')
-  .argument('<extension-path>', 'Path to unpacked extension directory')
-  .option('-i, --extension-id <id>', 'Extension ID (auto-detected from service worker)')
-  .option('-o, --output <dir>', 'Output directory', './output')
-  .option('--headless', 'Run in headless mode (needs Xvfb or headless=new)', false)
-  .option('--no-stealth', 'Disable stealth plugin')
-  .option('--no-analysis', 'Skip LLM analysis phase')
+  .description(
+    'Analyze a single extension. Launches Chrome, loads the extension,\n' +
+    'runs browsing scenarios (login/banking/checkout with canary data),\n' +
+    'and captures all network + API activity.\n\n' +
+    'Output files:\n' +
+    '  summary.json    — Run metadata, stats, timing\n' +
+    '  stats.json      — Event counts by category\n' +
+    '  llm_summary.md  — Formatted summary for LLM consumption\n' +
+    '  *.jsonl         — Raw event stream (network requests, API hooks)',
+  )
+  .argument('<extension-path>', 'Path to unpacked extension directory (must contain manifest.json)')
+  .option('-i, --extension-id <id>', 'Extension ID (auto-detected from Chrome if omitted)')
+  .option('-o, --output <dir>', 'Output directory for results', './output')
+  .option('--headless', 'Run headless (no display needed)', false)
+  .option('--no-stealth', 'Disable puppeteer-extra-plugin-stealth')
   .option('--duration <seconds>', 'Max scenario duration in seconds', '120')
-  .option('--chrome-path <path>', 'Path to Chrome binary')
-  .option('--phases <phases>', 'Comma-separated phase list', 'install,browse,login,banking,shopping,idle,tabs')
+  .option('--chrome-path <path>', 'Chrome binary path (auto-detected if omitted)')
+  .option(
+    '--phases <phases>',
+    'Comma-separated phases: install,browse,login,banking,shopping,idle,tabs',
+    'install,browse,login,banking,shopping,idle,tabs',
+  )
   .action(async (extensionPath: string, opts: any) => {
     const absPath = resolve(extensionPath);
 
-    // Verify extension path exists
     try {
       const s = await stat(absPath);
       if (!s.isDirectory()) {
-        logger.error('Extension path must be a directory');
+        console.error('ERROR: Extension path must be a directory');
         process.exit(1);
       }
-    } catch {
-      logger.error({ path: absPath }, 'Extension path does not exist');
-      process.exit(1);
-    }
-
-    // Verify manifest.json exists
-    try {
       await stat(resolve(absPath, 'manifest.json'));
     } catch {
-      logger.error({ path: absPath }, 'No manifest.json found — is this an unpacked extension?');
+      console.error(`ERROR: No manifest.json found at ${absPath}`);
       process.exit(1);
     }
 
     const config = defaultConfig(opts.extensionId ?? 'unknown', absPath);
-
     config.outputDir = resolve(opts.output);
     config.browser.headless = opts.headless;
     config.browser.stealth = opts.stealth !== false;
     config.browser.executablePath = opts.chromePath;
     config.scenario.maxDuration = parseInt(opts.duration, 10);
-    config.analysis.enabled = opts.analysis !== false;
-    config.scenario.phases = opts.phases.split(',').map((s: string) => s.trim());
+    config.scenario.phases = opts.phases.split(',').map((s: string) => s.trim()) as PhaseId[];
 
     logger.info({
       extensionPath: absPath,
-      extensionId: config.extensionId,
       duration: config.scenario.maxDuration,
       phases: config.scenario.phases,
-    }, 'Starting dynamic analysis');
+    }, 'Starting analysis');
 
     try {
       const result = await analyze(config);
-      logger.info({
-        outputDir: result.outputDir,
-        status: result.summary.status,
-        canaryDetections: result.summary.canaryDetections,
-      }, 'Analysis complete');
 
-      // Print the LLM summary to stdout for easy piping
-      console.log('\n' + result.llmSummary);
-    } catch (err) {
-      logger.error({ err }, 'Analysis failed');
+      // Print summary to stdout — the LLM reads this
+      console.log(result.llmSummary);
+
+      if (result.summary.canaryDetections > 0) {
+        console.error(`\n⚠️  ${result.summary.canaryDetections} CANARY DETECTION(S) — data exfiltration confirmed`);
+      }
+
+      console.error(`\nResults written to: ${result.outputDir}`);
+      console.error(`Run 'query' subcommands to investigate further.`);
+    } catch (err: any) {
+      console.error(`Analysis failed: ${err.message}`);
       process.exit(1);
     }
   });
 
-program
-  .command('mcp')
-  .description('Start the MCP server for LLM-driven investigation')
-  .option('-p, --port <port>', 'MCP server port', '3100')
-  .action(async (opts: any) => {
-    logger.info({ port: opts.port }, 'MCP server not yet implemented — coming in Phase 3');
+// ============================================================
+// QUERY command group
+// ============================================================
+const query = program
+  .command('query')
+  .description(
+    'Query collected data from a previous analysis run.\n' +
+    'All subcommands output JSON to stdout for easy parsing.',
+  );
+
+// --- query network ---
+query
+  .command('network')
+  .description(
+    'List network requests from the analysis run.\n' +
+    'Shows: id, method, url, status, flags, canary detections.\n\n' +
+    'Examples:\n' +
+    '  query network ./output/ext-id                  # all requests (limit 50)\n' +
+    '  query network ./output/ext-id --flagged         # suspicious only\n' +
+    '  query network ./output/ext-id --domain evil.com  # filter by domain\n' +
+    '  query network ./output/ext-id --method POST      # POST requests only',
+  )
+  .argument('<output-dir>', 'Path to analysis output directory')
+  .option('--domain <domain>', 'Filter by domain substring')
+  .option('--method <method>', 'Filter by HTTP method (GET, POST, etc.)')
+  .option('--flagged', 'Only show flagged/suspicious requests', false)
+  .option('--limit <n>', 'Max results', '50')
+  .action(async (outputDir: string, opts: any) => {
+    const results = await queryNetwork(resolve(outputDir), {
+      domain: opts.domain,
+      method: opts.method,
+      flaggedOnly: opts.flagged,
+      limit: parseInt(opts.limit, 10),
+    });
+    console.log(JSON.stringify(results, null, 2));
+  });
+
+// --- query request ---
+query
+  .command('request')
+  .description(
+    'Get full details for a specific network request by ID.\n' +
+    'Includes headers, body preview, response body, canary matches.\n' +
+    'Use after "query network" to drill into suspicious requests.',
+  )
+  .argument('<output-dir>', 'Path to analysis output directory')
+  .argument('<request-id>', 'Request ID from "query network" output')
+  .action(async (outputDir: string, requestId: string) => {
+    const result = await queryRequestDetail(resolve(outputDir), requestId);
+    if (!result) {
+      console.error(`Request ${requestId} not found`);
+      process.exit(1);
+    }
+    console.log(JSON.stringify(result, null, 2));
+  });
+
+// --- query hooks ---
+query
+  .command('hooks')
+  .description(
+    'List chrome.* API calls and page hook callbacks.\n' +
+    'Shows: api name, arguments, return value, caller context.\n\n' +
+    'Examples:\n' +
+    '  query hooks ./output/ext-id                        # all hooks\n' +
+    '  query hooks ./output/ext-id --api chrome.cookies    # cookie API only\n' +
+    '  query hooks ./output/ext-id --api chrome.tabs       # tab enumeration\n' +
+    '  query hooks ./output/ext-id --api chrome.history    # history access',
+  )
+  .argument('<output-dir>', 'Path to analysis output directory')
+  .option('--api <name>', 'Filter by API namespace (e.g., chrome.cookies, page.fetch)')
+  .option('--limit <n>', 'Max results', '100')
+  .action(async (outputDir: string, opts: any) => {
+    const results = await queryHooks(resolve(outputDir), {
+      api: opts.api,
+      limit: parseInt(opts.limit, 10),
+    });
+    console.log(JSON.stringify(results, null, 2));
+  });
+
+// --- query canary ---
+query
+  .command('canary')
+  .description(
+    'Show all canary data detections — the strongest exfiltration evidence.\n' +
+    'If canary data (planted credentials, CC numbers, etc.) appeared in any\n' +
+    'outbound request, that is CONFIRMED data theft with zero false positives.',
+  )
+  .argument('<output-dir>', 'Path to analysis output directory')
+  .action(async (outputDir: string) => {
+    const results = await queryCanary(resolve(outputDir));
+    if (results.length === 0) {
+      console.log('[]');
+      console.error('No canary detections — extension did not exfiltrate planted data.');
+    } else {
+      console.log(JSON.stringify(results, null, 2));
+      console.error(`⚠️  ${results.length} canary detection(s) found!`);
+    }
+  });
+
+// --- query domains ---
+query
+  .command('domains')
+  .description(
+    'List all external domains contacted, sorted by request count.\n' +
+    'Excludes chrome-extension:// and localhost requests.',
+  )
+  .argument('<output-dir>', 'Path to analysis output directory')
+  .action(async (outputDir: string) => {
+    const results = await queryDomains(resolve(outputDir));
+    console.log(JSON.stringify(results, null, 2));
+  });
+
+// --- query summary ---
+query
+  .command('summary')
+  .description('Print the LLM-formatted summary from a previous run.')
+  .argument('<output-dir>', 'Path to analysis output directory')
+  .action(async (outputDir: string) => {
+    const summary = await readFile(resolve(outputDir, 'llm_summary.md'), 'utf-8');
+    console.log(summary);
+  });
+
+// --- query stats ---
+query
+  .command('stats')
+  .description('Print run statistics (event counts, domains, API usage).')
+  .argument('<output-dir>', 'Path to analysis output directory')
+  .action(async (outputDir: string) => {
+    const stats = await readFile(resolve(outputDir, 'stats.json'), 'utf-8');
+    console.log(stats);
   });
 
 program.parse();
