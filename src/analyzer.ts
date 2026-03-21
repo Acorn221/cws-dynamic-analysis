@@ -183,9 +183,30 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
       }
     });
 
-    // 4. Run the scenario (engine updates phaseTracker.current)
-    log.info('Starting scenario...');
-    await runScenario(page, config.scenario, config.canary, canaryPort, phaseTracker);
+    // 4. Extension interaction phase — LLM navigates popup/options/onboarding
+    if (config.scenario.phases.includes('ext-interact')) {
+      phaseTracker.current = 'ext-interact';
+      log.info('Starting LLM-driven extension interaction...');
+      try {
+        const { interactWithExtension } = await import('./scenario/ext-interact.js');
+        const interactResult = await interactWithExtension(browser, {
+          extensionId: config.extensionId,
+          model: config.analysis.triageModel,
+          maxTurns: 15,
+        });
+        log.info({
+          turns: interactResult.turns,
+          actions: interactResult.actions.length,
+        }, 'Extension interaction complete');
+      } catch (err: any) {
+        log.warn({ err: err.message }, 'Extension interaction failed (non-fatal)');
+      }
+    }
+
+    // 5. Run the browsing scenario (engine updates phaseTracker.current)
+    const browsingPhases = config.scenario.phases.filter(p => p !== 'ext-interact');
+    log.info('Starting browsing scenario...');
+    await runScenario(page, { ...config.scenario, phases: browsingPhases }, config.canary, canaryPort, phaseTracker);
     phaseTracker.current = 'post';
     log.info('Scenario complete');
 

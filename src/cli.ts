@@ -69,10 +69,11 @@ program
   .option('--no-instrument', 'Skip source rewriting (use runtime injection only)')
   .option('--duration <seconds>', 'Max scenario duration in seconds', '120')
   .option('--chrome-path <path>', 'Chrome binary path (auto-detected if omitted)')
+  .option('--interact-model <model>', 'Model for extension UI interaction', 'claude-haiku-4-5-20251001')
   .option(
     '--phases <phases>',
-    'Comma-separated phases: install,browse,login,banking,shopping,idle,tabs',
-    'install,browse,login,banking,shopping,idle,tabs',
+    'Comma-separated phases: install,ext-interact,browse,login,banking,shopping,idle,tabs',
+    'install,ext-interact,browse,login,banking,shopping,idle,tabs',
   )
   .action(async (extensionPath: string, opts: any) => {
     const absPath = resolve(extensionPath);
@@ -97,6 +98,7 @@ program
     config.browser.executablePath = opts.chromePath;
     config.scenario.maxDuration = parseInt(opts.duration, 10);
     config.scenario.phases = opts.phases.split(',').map((s: string) => s.trim()) as PhaseId[];
+    if (opts.interactModel) config.analysis.triageModel = opts.interactModel;
 
     logger.info({
       extensionPath: absPath,

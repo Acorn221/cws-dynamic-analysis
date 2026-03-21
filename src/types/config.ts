@@ -55,6 +55,7 @@ export interface ScenarioConfig {
 
 export type PhaseId =
   | 'install'
+  | 'ext-interact'
   | 'browse'
   | 'login'
   | 'banking'
@@ -118,16 +119,17 @@ export function defaultConfig(
       stealth: true,
     },
     scenario: {
-      phases: ['install', 'browse', 'login', 'banking', 'shopping', 'idle', 'tabs'],
+      phases: ['install', 'ext-interact', 'browse', 'login', 'banking', 'shopping', 'idle', 'tabs'],
       maxDuration: 900,
       phaseDurations: {
-        install: 30,
-        browse: 90,
-        login: 120,
-        banking: 120,
-        shopping: 120,
-        idle: 300,
-        tabs: 120,
+        'install': 30,
+        'ext-interact': 120,
+        'browse': 90,
+        'login': 120,
+        'banking': 120,
+        'shopping': 120,
+        'idle': 300,
+        'tabs': 120,
       },
       timeAcceleration: true,
       timeJumps: [3600, 86400, 259200],  // 1hr, 1day, 3days
