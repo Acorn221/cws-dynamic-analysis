@@ -2,9 +2,11 @@
  * Core analysis pipeline — orchestrates the full e2e flow:
  * Launch browser → instrument → run scenarios → collect → detect → summarize → output
  */
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { Browser, Page, CDPSession, Target } from 'puppeteer';
+import { rewriteExtension } from './instrument/rewriter.js';
 import { launchBrowser, closeBrowser } from './cdp/browser.js';
 import { enableNetworkMonitoring } from './cdp/network.js';
 import {
@@ -49,12 +51,21 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
   // JSONL path is set after we know the extension ID
   let jsonlPath = '';
   let jsonl: JsonlWriter | null = null;
+  let rewrittenPath: string | null = null;
 
   try {
+    // 0. Optionally rewrite extension source to inject hooks
+    let extensionLoadPath = config.extensionPath;
+    if (config.instrument !== false) {
+      rewrittenPath = join(tmpdir(), `cws-da-${config.runId}`);
+      log.info('Rewriting extension source to inject hooks...');
+      extensionLoadPath = await rewriteExtension(config.extensionPath, rewrittenPath);
+    }
+
     // 1. Launch browser with extension
     log.info('Launching browser...');
     const { browser: b, extensionId, browserSession } = await launchBrowser(
-      config.extensionPath,
+      extensionLoadPath,
       config.browser,
     );
     browser = b;
@@ -270,6 +281,10 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
   } finally {
     if (browser) await closeBrowser(browser);
     await stopCanaryServer();
+    // Clean up rewritten extension copy
+    if (rewrittenPath) {
+      await rm(rewrittenPath, { recursive: true, force: true }).catch(() => {});
+    }
   }
 }
 

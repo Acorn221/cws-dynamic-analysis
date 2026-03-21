@@ -61,6 +61,7 @@ program
   .option('-o, --output <dir>', 'Output directory for results', './output')
   .option('--headless', 'Run headless (no display needed)', false)
   .option('--no-stealth', 'Disable puppeteer-extra-plugin-stealth')
+  .option('--no-instrument', 'Skip source rewriting (use runtime injection only)')
   .option('--duration <seconds>', 'Max scenario duration in seconds', '120')
   .option('--chrome-path <path>', 'Chrome binary path (auto-detected if omitted)')
   .option(
@@ -87,6 +88,7 @@ program
     config.outputDir = resolve(opts.output);
     config.browser.headless = opts.headless;
     config.browser.stealth = opts.stealth !== false;
+    config.instrument = opts.instrument !== false;
     config.browser.executablePath = opts.chromePath;
     config.scenario.maxDuration = parseInt(opts.duration, 10);
     config.scenario.phases = opts.phases.split(',').map((s: string) => s.trim()) as PhaseId[];
@@ -245,6 +247,82 @@ query
   .action(async (outputDir: string) => {
     const stats = await readFile(resolve(outputDir, 'stats.json'), 'utf-8');
     console.log(stats);
+  });
+
+// ============================================================
+// BATCH command
+// ============================================================
+program
+  .command('batch')
+  .description(
+    'Analyze multiple extensions in parallel.\n' +
+    'Takes a file with one extension directory path per line.\n\n' +
+    'Example:\n' +
+    '  echo "/path/to/ext1\\n/path/to/ext2" > batch.txt\n' +
+    '  cws-dynamic-analyze batch batch.txt -o ./output --workers 8',
+  )
+  .argument('<list-file>', 'File with one extension path per line')
+  .option('-o, --output <dir>', 'Base output directory (subdirs created per extension)', './output')
+  .option('-w, --workers <n>', 'Parallel workers', '8')
+  .option('--headless', 'Run headless', false)
+  .option('--duration <seconds>', 'Max duration per extension', '120')
+  .option('--chrome-path <path>', 'Chrome binary path')
+  .option('--phases <phases>', 'Phases to run', 'install,browse,login,banking,shopping,idle,tabs')
+  .action(async (listFile: string, opts: any) => {
+    const lines = (await readFile(resolve(listFile), 'utf-8'))
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('#'));
+
+    const workers = parseInt(opts.workers, 10);
+    const total = lines.length;
+    let completed = 0;
+    let failed = 0;
+
+    logger.info({ total, workers }, 'Starting batch analysis');
+
+    // Simple worker pool
+    const queue = [...lines];
+    const results: Array<{ path: string; status: string; extensionId?: string; canary?: number }> = [];
+
+    async function runWorker() {
+      while (queue.length > 0) {
+        const extPath = queue.shift()!;
+        const extId = extPath.split('/').pop() ?? 'unknown';
+        const outDir = resolve(opts.output, extId);
+
+        try {
+          const config = defaultConfig(extId, resolve(extPath));
+          config.outputDir = outDir;
+          config.browser.headless = opts.headless || true; // batch always headless
+          config.browser.executablePath = opts.chromePath;
+          config.scenario.maxDuration = parseInt(opts.duration, 10);
+          config.scenario.phases = opts.phases.split(',').map((s: string) => s.trim()) as PhaseId[];
+
+          const result = await analyze(config);
+          completed++;
+          results.push({
+            path: extPath,
+            status: 'completed',
+            extensionId: result.summary.extensionId,
+            canary: result.summary.canaryDetections,
+          });
+          logger.info({ completed, total, extId, canary: result.summary.canaryDetections }, 'Extension done');
+        } catch (err: any) {
+          failed++;
+          completed++;
+          results.push({ path: extPath, status: `failed: ${err.message}` });
+          logger.error({ extId, err: err.message }, 'Extension failed');
+        }
+      }
+    }
+
+    // Launch worker pool
+    await Promise.all(Array.from({ length: workers }, () => runWorker()));
+
+    // Print summary table
+    console.log(JSON.stringify(results, null, 2));
+    logger.info({ completed, failed, total }, 'Batch complete');
   });
 
 program.parse();

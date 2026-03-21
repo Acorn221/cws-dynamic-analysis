@@ -21,6 +21,8 @@ export interface RunConfig {
   analysis: AnalysisConfig;
   /** Network isolation settings */
   network: NetworkConfig;
+  /** Rewrite extension source to inject hooks (default: true) */
+  instrument: boolean;
 }
 
 export interface BrowserConfig {
@@ -159,5 +161,6 @@ export function defaultConfig(
       blockExfiltration: false,
       allowlist: [],
     },
+    instrument: true,
   };
 }
