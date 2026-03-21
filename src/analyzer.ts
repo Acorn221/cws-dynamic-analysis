@@ -196,8 +196,9 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
       jsonl?.write({ type: 'api_call', ...call });
     });
 
-    // Inject time acceleration if enabled
-    if (config.scenario.timeAcceleration) {
+    // Inject time acceleration if enabled (skip for --session runs — we want
+    // to observe natural behavior after onboarding, not break Date.now)
+    if (config.scenario.timeAcceleration && !config.sessionDir) {
       try {
         await accelerateAlarms(swCdp);
         for (const jump of config.scenario.timeJumps) {
