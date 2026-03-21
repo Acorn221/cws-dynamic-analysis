@@ -22,7 +22,12 @@ Read DOM. Accept ToS/onboarding:
 da click /tmp/s '{"action":"click","selector":"SELECTOR"}'
 ```
 
-RULES: Max 8 actions. No background. No code edits. If error → Phase 2 without --session.
+RULES:
+- Max 8 actions. If not done by then, move on.
+- No background commands. No code edits.
+- If error/timeout → Phase 2 without --session.
+- Skip product tours/walkthroughs — just close them (click X or dismiss). Only interact with ToS/privacy/setup.
+- Don't query the same thing twice.
 
 ## PHASE 2: SCENARIO (~90s)
 

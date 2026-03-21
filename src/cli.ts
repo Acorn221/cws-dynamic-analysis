@@ -111,15 +111,9 @@ program
     try {
       const result = await analyze(config);
 
-      // Print summary to stdout — the LLM reads this
-      console.log(result.llmSummary);
-
-      if (result.summary.canaryDetections > 0) {
-        console.error(`\n⚠️  ${result.summary.canaryDetections} CANARY DETECTION(S) — data exfiltration confirmed`);
-      }
-
-      console.error(`\nResults written to: ${result.outputDir}`);
-      console.error(`Run 'query' subcommands to investigate further.`);
+      // Compact output — agent reads details via query commands
+      const s = result.summary;
+      console.log(`DONE status=${s.status} requests=${s.networkStats.totalRequests} flagged=${s.networkStats.flaggedRequests} canary=${s.canaryDetections} dir=${result.outputDir}`);
     } catch (err: any) {
       console.error(`Analysis failed: ${err.message}`);
       process.exit(1);
@@ -158,6 +152,7 @@ query
   .option('--source <source>', 'Filter by source (extension, page, unknown)')
   .option('--phase <phase>', 'Filter by scenario phase (install, browse, login, banking, etc.)')
   .option('--limit <n>', 'Max results', '50')
+  .option('--json', 'Full JSON output (default: compact one-line-per-request)')
   .action(async (outputDir: string, opts: any) => {
     const results = await queryNetwork(resolve(outputDir), {
       domain: opts.domain,
@@ -167,7 +162,17 @@ query
       phase: opts.phase,
       limit: parseInt(opts.limit, 10),
     });
-    console.log(JSON.stringify(results, null, 2));
+    if (opts.json) {
+      console.log(JSON.stringify(results, null, 2));
+    } else {
+      // Compact: one line per request, token-efficient
+      for (const r of results) {
+        const flags = r.flagReasons?.length ? ` [${r.flagReasons.join(',')}]` : '';
+        const canary = r.canaryDetections > 0 ? ` CANARY=${r.canaryDetections}` : '';
+        console.log(`${r.id} ${r.source} ${r.method} ${r.status ?? '?'} ${r.url.slice(0, 100)}${flags}${canary}`);
+      }
+      console.error(`${results.length} requests`);
+    }
   });
 
 // --- query request ---
@@ -207,6 +212,7 @@ query
   .option('--source <source>', 'Filter by caller context (service_worker, page, etc.)')
   .option('--unique', 'Deduplicate by API name, show call count per API', false)
   .option('--limit <n>', 'Max results', '100')
+  .option('--json', 'Full JSON output')
   .action(async (outputDir: string, opts: any) => {
     const results = await queryHooks(resolve(outputDir), {
       api: opts.api,
@@ -214,7 +220,19 @@ query
       unique: opts.unique,
       limit: parseInt(opts.limit, 10),
     });
-    console.log(JSON.stringify(results, null, 2));
+    if (opts.json) {
+      console.log(JSON.stringify(results, null, 2));
+    } else if (opts.unique) {
+      for (const r of results) {
+        console.log(`${r.count}x ${r.api} (${r.callerContext})`);
+      }
+    } else {
+      for (const r of results) {
+        const args = JSON.stringify(r.args).slice(0, 80);
+        console.log(`${r.id} ${r.api} ${args}`);
+      }
+    }
+    console.error(`${results.length} results`);
   });
 
 // --- query canary ---
@@ -245,9 +263,16 @@ query
     'Excludes chrome-extension:// and localhost requests.',
   )
   .argument('<output-dir>', 'Path to analysis output directory')
-  .action(async (outputDir: string) => {
+  .option('--json', 'Full JSON output')
+  .action(async (outputDir: string, opts: any) => {
     const results = await queryDomains(resolve(outputDir));
-    console.log(JSON.stringify(results, null, 2));
+    if (opts.json) {
+      console.log(JSON.stringify(results, null, 2));
+    } else {
+      for (const [domain, count] of Object.entries(results)) {
+        console.log(`${count} ${domain}`);
+      }
+    }
   });
 
 // --- query console ---
