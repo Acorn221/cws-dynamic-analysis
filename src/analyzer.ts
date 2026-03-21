@@ -18,13 +18,14 @@ import { injectTimeOverride, accelerateAlarms } from './scenario/time-accel.js';
 import { createPhaseTracker, type PhaseTracker } from './scenario/phase-tracker.js';
 import { EventBuffer } from './collector/buffer.js';
 import { JsonlWriter } from './collector/jsonl-writer.js';
+import { SqliteStore } from './collector/sqlite.js';
 import { Detector } from './collector/detector.js';
 import { summarizeForLLM } from './collector/summarizer.js';
 import { linkCausalChains } from './collector/causal-linker.js';
 import { startCanaryServer, stopCanaryServer } from './scenario/canary-server.js';
 import { runScenario } from './scenario/engine.js';
 import type { RunConfig } from './types/config.js';
-import type { ApiCall, NetworkRequest } from './types/events.js';
+import type { ApiCall, NetworkRequest, ConsoleEntry } from './types/events.js';
 import type { RunSummary } from './types/findings.js';
 import { logger } from './logger.js';
 
@@ -42,6 +43,26 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
   const detector = new Detector(config.canary);
   const phaseTracker = createPhaseTracker();
 
+  // Unified sink — writes to buffer + jsonl + sqlite in one call
+  const sink = {
+    request(req: NetworkRequest) {
+      detector.scan(req);
+      for (const cd of req.canaryDetections) buffer.addCanaryDetection(cd);
+      buffer.addNetworkRequest(req);
+      jsonl?.write({ type: 'network', ...req });
+      sqlite?.addRequest(req);
+    },
+    hook(call: ApiCall) {
+      buffer.addApiCall(call);
+      jsonl?.write({ type: 'api_call', ...call });
+      sqlite?.addHook(call);
+    },
+    console(entry: ConsoleEntry) {
+      buffer.addConsoleEntry(entry);
+      sqlite?.addConsoleEntry(entry);
+    },
+  };
+
   await mkdir(config.outputDir, { recursive: true });
 
   // Start canary page server
@@ -51,6 +72,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
 
   let browser: Browser | null = null;
   let jsonl: JsonlWriter | null = null;
+  let sqlite: SqliteStore | null = null;
   let jsonlPath = '';
   let rewrittenPath: string | null = null;
   const sourceRewritten = config.instrument !== false;
@@ -93,6 +115,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     jsonlPath = join(config.outputDir, 'events.jsonl');
     jsonl = new JsonlWriter(jsonlPath);
     await jsonl.open();
+    sqlite = new SqliteStore(config.outputDir);
 
     // Save manifest for query manifest command
     try {
@@ -149,12 +172,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     // Enable network monitoring on service worker (with phase tracker)
     await enableNetworkMonitoring(swCdp, 'service_worker', (req: NetworkRequest) => {
       req.phase = phaseTracker.current;
-      detector.scan(req);
-      for (const cd of req.canaryDetections) {
-        buffer.addCanaryDetection(cd);
-      }
-      buffer.addNetworkRequest(req);
-      jsonl?.write({ type: 'network', ...req });
+      sink.request(req);
     }, phaseTracker);
 
     // Capture SW console messages (separate from page console)
@@ -167,7 +185,7 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
       const text = (event.args ?? [])
         .map((a: any) => a.value ?? a.description ?? '')
         .join(' ');
-      buffer.addConsoleEntry({
+      sink.console({
         timestamp: new Date().toISOString(),
         level: event.type === 'error' ? 'error' : event.type === 'warning' ? 'warn' : 'log',
         source: 'extension',
@@ -192,8 +210,7 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
         relatedEvents: [],
         phase: phaseTracker.current,
       };
-      buffer.addApiCall(call);
-      jsonl?.write({ type: 'api_call', ...call });
+      sink.hook(call);
     });
 
     // Inject time acceleration if enabled (skip for --session runs — we want
@@ -216,7 +233,7 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
     const pages = await browser.pages();
     const page = pages[0] ?? await browser.newPage();
 
-    await instrumentPage(page, buffer, detector, jsonl!, phaseTracker);
+    await instrumentPage(page, buffer, sink, phaseTracker);
 
     // Instrument any new pages that open during the scenario
     browser.on('targetcreated', async (target: Target) => {
@@ -224,7 +241,7 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
         try {
           const newPage = await target.page();
           if (newPage) {
-            await instrumentPage(newPage, buffer, detector, jsonl!, phaseTracker);
+            await instrumentPage(newPage, buffer, sink, phaseTracker);
           }
         } catch (err) {
           log.debug({ err }, 'Failed to instrument new page target');
@@ -311,6 +328,7 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
     await writeFile(join(config.outputDir, 'console.json'), JSON.stringify(buffer.consoleEntries, null, 2));
 
     await jsonl?.close();
+    sqlite?.close();
 
     log.info('=== ANALYSIS COMPLETE ===');
     log.info({
@@ -333,6 +351,7 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
   } catch (err) {
     log.error({ err }, 'Analysis failed');
     await jsonl?.close();
+    sqlite?.close();
 
     const finishedAt = new Date().toISOString();
     const summary: RunSummary = {
@@ -367,8 +386,7 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
 async function instrumentPage(
   page: Page,
   buffer: EventBuffer,
-  detector: Detector,
-  jsonl: JsonlWriter,
+  sinkObj: { request: (r: NetworkRequest) => void; hook: (c: ApiCall) => void; console: (e: ConsoleEntry) => void },
   phaseTracker: PhaseTracker,
 ): Promise<void> {
   try {
@@ -377,17 +395,12 @@ async function instrumentPage(
     const currentPageUrl = page.url();
     await enableNetworkMonitoring(cdp, 'page', (req: NetworkRequest) => {
       req.phase = phaseTracker.current;
-      detector.scan(req);
-      for (const cd of req.canaryDetections) {
-        buffer.addCanaryDetection(cd);
-      }
-      buffer.addNetworkRequest(req);
-      jsonl?.write({ type: 'network', ...req });
+      sinkObj.request(req);
     }, phaseTracker, currentPageUrl);
 
     await injectPageHooks(page);
     page.on('cws:hook' as any, (data: any) => {
-      const call: ApiCall = {
+      sinkObj.hook({
         id: buffer.nextId(),
         timestamp: new Date(data.ts).toISOString(),
         api: `page.${data.type}`,
@@ -396,15 +409,12 @@ async function instrumentPage(
         source: 'page',
         relatedEvents: [],
         phase: phaseTracker.current,
-      };
-      buffer.addApiCall(call);
-      jsonl?.write({ type: 'page_hook', ...call });
+      });
     });
 
     page.on('console', (msg) => {
-      // Skip our own hook messages
       if (msg.text().startsWith('[CWS_HOOK]')) return;
-      buffer.addConsoleEntry({
+      sinkObj.console({
         timestamp: new Date().toISOString(),
         level: msg.type() === 'error' ? 'error' : (msg.type() as string) === 'warning' ? 'warn' : 'log',
         source: msg.location()?.url?.includes('chrome-extension://') ? 'extension' : 'page',

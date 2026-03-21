@@ -515,6 +515,63 @@ addShortcut('manifest', 'manifest');  // da manifest /tmp/r
 addShortcut('summary', 'summary');    // da summary /tmp/r
 addShortcut('stats', 'stats');        // da stats /tmp/r
 
+// --- da sql <output-dir> <query> — run raw SQL against events.db ---
+program
+  .command('sql')
+  .description(
+    'Run a SQL query against events.db.\n\n' +
+    'Tables: requests, hooks, console, canary\n' +
+    'Examples:\n' +
+    '  da sql /tmp/r "SELECT source, count(*) n FROM requests GROUP BY source"\n' +
+    '  da sql /tmp/r "SELECT * FROM requests WHERE domain LIKE \'%stayfree%\'"\n' +
+    '  da sql /tmp/r "SELECT api, count(*) n FROM hooks GROUP BY api ORDER BY n DESC LIMIT 10"\n' +
+    '  da sql /tmp/r "SELECT * FROM canary"\n' +
+    '  da sql /tmp/r ".schema"',
+  )
+  .argument('<output-dir>', 'Analysis output directory containing events.db')
+  .argument('<query>', 'SQL query or .schema/.tables')
+  .action(async (outputDir: string, queryStr: string) => {
+    const Database = (await import('better-sqlite3')).default;
+    const { join } = await import('node:path');
+    const dbPath = join(resolve(outputDir), 'events.db');
+    try {
+      const db = new Database(dbPath, { readonly: true });
+      if (queryStr === '.schema') {
+        const tables = db.prepare("SELECT sql FROM sqlite_master WHERE type='table'").all();
+        for (const t of tables as any[]) console.log(t.sql + ';\n');
+      } else if (queryStr === '.tables') {
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all();
+        console.log((tables as any[]).map((t) => t.name).join('\n'));
+      } else {
+        const stmt = db.prepare(queryStr);
+        if (stmt.reader) {
+          const rows = stmt.all();
+          // Compact output: one line per row
+          if (rows.length === 0) {
+            console.log('(no rows)');
+          } else {
+            const cols = Object.keys(rows[0] as any);
+            console.log(cols.join('\t'));
+            for (const row of rows as any[]) {
+              console.log(cols.map((c) => {
+                const v = row[c];
+                return v === null ? '' : String(v).slice(0, 200);
+              }).join('\t'));
+            }
+          }
+          console.error(`${rows.length} rows`);
+        } else {
+          const result = stmt.run();
+          console.log(`OK: ${result.changes} rows affected`);
+        }
+      }
+      db.close();
+    } catch (err: any) {
+      console.error(`SQL error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
 // interact shortcuts
 function addInteractShortcut(name: string, target: string) {
   program
