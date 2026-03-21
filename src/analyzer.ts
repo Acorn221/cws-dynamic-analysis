@@ -56,26 +56,38 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
   const sourceRewritten = config.instrument !== false;
 
   try {
-    // 0. Optionally rewrite extension source to inject hooks
-    let extensionLoadPath = config.extensionPath;
-    if (sourceRewritten) {
-      rewrittenPath = join(tmpdir(), `cws-da-${config.runId}`);
-      log.info('Rewriting extension source to inject hooks...');
-      extensionLoadPath = await rewriteExtension(config.extensionPath, rewrittenPath);
-    }
+    // 0. Connect to existing interact session OR launch new browser
+    if (config.sessionDir) {
+      // Reuse browser from an interact session (extension already onboarded)
+      const sessionData = JSON.parse(
+        await readFile(join(config.sessionDir, 'session.json'), 'utf-8'),
+      );
+      log.info({ sessionDir: config.sessionDir }, 'Connecting to existing browser session');
+      const puppeteer = (await import('puppeteer')).default;
+      browser = await puppeteer.connect({ browserWSEndpoint: sessionData.wsEndpoint });
+      config.extensionId = sessionData.extensionId;
+      log.info({ extensionId: config.extensionId }, 'Connected to session');
+    } else {
+      // Fresh browser launch
+      let extensionLoadPath = config.extensionPath;
+      if (sourceRewritten) {
+        rewrittenPath = join(tmpdir(), `cws-da-${config.runId}`);
+        log.info('Rewriting extension source to inject hooks...');
+        extensionLoadPath = await rewriteExtension(config.extensionPath, rewrittenPath);
+      }
 
-    // 1. Launch browser with extension
-    log.info('Launching browser...');
-    const { browser: b, extensionId } = await launchBrowser(
-      extensionLoadPath,
-      config.browser,
-    );
-    browser = b;
+      log.info('Launching browser...');
+      const { browser: b, extensionId } = await launchBrowser(
+        extensionLoadPath,
+        config.browser,
+      );
+      browser = b;
 
-    if (config.extensionId === 'unknown') {
-      config.extensionId = extensionId;
+      if (config.extensionId === 'unknown') {
+        config.extensionId = extensionId;
+      }
+      log.info({ extensionId: config.extensionId }, 'Browser launched, extension loaded');
     }
-    log.info({ extensionId: config.extensionId }, 'Browser launched, extension loaded');
 
     // Deterministic JSONL filename: events.jsonl (no UUID)
     jsonlPath = join(config.outputDir, 'events.jsonl');
@@ -314,7 +326,8 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
     await writeFile(join(config.outputDir, 'summary.json'), JSON.stringify(summary, null, 2));
     throw err;
   } finally {
-    if (browser) await closeBrowser(browser);
+    // Only close browser if we launched it (not if we connected to a session)
+    if (browser && !config.sessionDir) await closeBrowser(browser);
     await stopCanaryServer();
     if (rewrittenPath) {
       await rm(rewrittenPath, { recursive: true, force: true }).catch(() => {});

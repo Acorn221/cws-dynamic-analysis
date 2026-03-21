@@ -67,6 +67,7 @@ program
   .option('--headless', 'Run headless (no display needed)', false)
   .option('--no-stealth', 'Disable puppeteer-extra-plugin-stealth')
   .option('--no-instrument', 'Skip source rewriting (use runtime injection only)')
+  .option('--session <dir>', 'Reuse browser from an interact session (same profile/state)')
   .option('--duration <seconds>', 'Max scenario duration in seconds', '120')
   .option('--chrome-path <path>', 'Chrome binary path (auto-detected if omitted)')
   .option('--interact-model <model>', 'Model for extension UI interaction', 'claude-haiku-4-5-20251001')
@@ -95,6 +96,7 @@ program
     config.browser.headless = opts.headless;
     config.browser.stealth = opts.stealth !== false;
     config.instrument = opts.instrument !== false;
+    config.sessionDir = opts.session ? resolve(opts.session) : undefined;
     config.browser.executablePath = opts.chromePath;
     config.scenario.maxDuration = parseInt(opts.duration, 10);
     config.scenario.phases = opts.phases.split(',').map((s: string) => s.trim()) as PhaseId[];

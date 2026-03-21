@@ -23,6 +23,8 @@ export interface RunConfig {
   network: NetworkConfig;
   /** Rewrite extension source to inject hooks (default: true) */
   instrument: boolean;
+  /** Path to interact session dir — reuse its browser instead of launching new one */
+  sessionDir?: string;
 }
 
 export interface BrowserConfig {
