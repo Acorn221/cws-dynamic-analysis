@@ -464,4 +464,47 @@ program
     logger.info({ completed, failed, total }, 'Batch complete');
   });
 
+// ============================================================
+// TOP-LEVEL SHORTCUTS — skip 'query' prefix for common commands
+// Single intuitive words, one token each
+// ============================================================
+function addShortcut(name: string, target: string, ...extraArgs: string[]) {
+  program
+    .command(name, { hidden: true })
+    .allowUnknownOption()
+    .argument('[args...]')
+    .action(async (args: string[]) => {
+      // Re-invoke as: query <target> <args...>
+      const argv = ['node', 'da', 'query', target, ...extraArgs, ...args];
+      await program.parseAsync(argv);
+    });
+}
+
+addShortcut('net', 'network');        // da net /tmp/r --source bgsw
+addShortcut('req', 'request');        // da req /tmp/r REQUEST_ID
+addShortcut('hooks', 'hooks');        // da hooks /tmp/r --api chrome
+addShortcut('canary', 'canary');      // da canary /tmp/r
+addShortcut('domains', 'domains');    // da domains /tmp/r
+addShortcut('log', 'console');        // da log /tmp/r --source extension
+addShortcut('manifest', 'manifest');  // da manifest /tmp/r
+addShortcut('summary', 'summary');    // da summary /tmp/r
+addShortcut('stats', 'stats');        // da stats /tmp/r
+
+// interact shortcuts
+function addInteractShortcut(name: string, target: string) {
+  program
+    .command(name, { hidden: true })
+    .allowUnknownOption()
+    .argument('[args...]')
+    .action(async (args: string[]) => {
+      const argv = ['node', 'da', 'interact', target, ...args];
+      await program.parseAsync(argv);
+    });
+}
+
+addInteractShortcut('open', 'start');     // da open /path/ext -o /tmp/s --headless
+addInteractShortcut('click', 'action');   // da click /tmp/s '{"action":"click",...}'
+addInteractShortcut('snap', 'snapshot');  // da snap /tmp/s
+addInteractShortcut('close', 'stop');     // da close /tmp/s
+
 program.parse();
