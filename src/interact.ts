@@ -135,25 +135,33 @@ export async function interactAction(
   const page = pages.find((p) => p.url().includes(session.extensionId)) ??
     pages.find((p) => p.url().includes('popup.html') || p.url().includes('options.html'));
 
-  if (!page) return 'ERROR: No extension page found. Run `interact start` first.';
+  if (!page) {
+    browser.disconnect();
+    return 'ERROR: No extension page found. Run `interact start` first.';
+  }
 
   try {
     switch (action.action) {
       case 'click':
-        if (!action.selector) return 'ERROR: click requires selector';
+        if (!action.selector) { browser.disconnect(); return 'ERROR: click requires selector'; }
         await page.waitForSelector(action.selector, { timeout: 3000 });
-        await page.click(action.selector);
+        // Use evaluate click — Puppeteer's click can hang when the click
+        // triggers navigation listeners or Vue/React re-renders.
+        await page.evaluate((sel) => {
+          const el = document.querySelector(sel);
+          if (el) (el as HTMLElement).click();
+        }, action.selector);
         break;
 
       case 'type':
-        if (!action.selector || !action.text) return 'ERROR: type requires selector and text';
+        if (!action.selector || !action.text) { browser.disconnect(); return 'ERROR: type requires selector and text'; }
         await page.waitForSelector(action.selector, { timeout: 3000 });
         await page.click(action.selector);
         await page.type(action.selector, action.text, { delay: 50 });
         break;
 
       case 'select':
-        if (!action.selector || !action.value) return 'ERROR: select requires selector and value';
+        if (!action.selector || !action.value) { browser.disconnect(); return 'ERROR: select requires selector and value'; }
         await page.select(action.selector, action.value);
         break;
 
@@ -164,21 +172,26 @@ export async function interactAction(
         break;
 
       case 'navigate':
-        if (!action.url) return 'ERROR: navigate requires url';
+        if (!action.url) { browser.disconnect(); return 'ERROR: navigate requires url'; }
         await page.goto(action.url, { waitUntil: 'load', timeout: 10000 });
         break;
 
       default:
+        browser.disconnect();
         return `ERROR: Unknown action "${action.action}"`;
     }
   } catch (err: any) {
-    return `ACTION FAILED: ${err.message}\n\n${await getSnapshot(page)}`;
+    const snap = await getSnapshot(page);
+    browser.disconnect();
+    return `ACTION FAILED: ${err.message}\n\n${snap}`;
   }
 
   // Wait for re-render
   await new Promise((r) => setTimeout(r, 1500));
 
-  return getSnapshot(page);
+  const snap = await getSnapshot(page);
+  browser.disconnect();
+  return snap;
 }
 
 /**
@@ -191,8 +204,10 @@ export async function interactSnapshot(outputDir: string): Promise<string> {
   const page = pages.find((p) => p.url().includes(session.extensionId)) ??
     pages.find((p) => p.url().includes('popup.html') || p.url().includes('options.html'));
 
-  if (!page) return 'ERROR: No extension page found.';
-  return getSnapshot(page);
+  if (!page) { browser.disconnect(); return 'ERROR: No extension page found.'; }
+  const snap = await getSnapshot(page);
+  browser.disconnect();
+  return snap;
 }
 
 /**
