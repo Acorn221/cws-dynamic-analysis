@@ -128,6 +128,20 @@ export async function interactAction(
   outputDir: string,
   action: { action: string; selector?: string; text?: string; value?: string; url?: string; direction?: string },
 ): Promise<string> {
+  // Hard 15s timeout on the entire action — if anything hangs, bail
+  const TIMEOUT = 15_000;
+  return Promise.race([
+    interactActionInner(outputDir, action),
+    new Promise<string>((_, reject) =>
+      setTimeout(() => reject(new Error('interact action timed out after 15s')), TIMEOUT),
+    ),
+  ]);
+}
+
+async function interactActionInner(
+  outputDir: string,
+  action: { action: string; selector?: string; text?: string; value?: string; url?: string; direction?: string },
+): Promise<string> {
   const session = await loadSession(outputDir);
   const browser = await puppeteer.connect({ browserWSEndpoint: session.wsEndpoint });
 
@@ -198,6 +212,15 @@ export async function interactAction(
  * Get a DOM snapshot of the active extension page.
  */
 export async function interactSnapshot(outputDir: string): Promise<string> {
+  return Promise.race([
+    interactSnapshotInner(outputDir),
+    new Promise<string>((_, reject) =>
+      setTimeout(() => reject(new Error('interact snapshot timed out after 10s')), 10_000),
+    ),
+  ]);
+}
+
+async function interactSnapshotInner(outputDir: string): Promise<string> {
   const session = await loadSession(outputDir);
   const browser = await puppeteer.connect({ browserWSEndpoint: session.wsEndpoint });
   const pages = await browser.pages();
