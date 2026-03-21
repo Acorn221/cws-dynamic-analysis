@@ -52,10 +52,9 @@ export class SessionManager {
         if (!targetInfo.url.includes(extensionId)) {
           // Not our extension — resume and ignore
           try {
-            await this.browserSession.send(
+            await (this.browserSession as any).send(
               'Runtime.runIfWaitingForDebugger',
               {},
-              // @ts-expect-error — sessionId param exists at CDP level
               sessionId,
             );
           } catch { /* target may have already resumed */ }

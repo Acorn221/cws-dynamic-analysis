@@ -49,7 +49,7 @@ export async function launchBrowser(
   const browser = await launchFn.call(
     config.stealth ? puppeteerExtra : puppeteer,
     {
-      headless: config.headless ? 'new' : false,
+      headless: config.headless,
       executablePath: config.executablePath,
       args,
       defaultViewport: { width: 1920, height: 1080 },
