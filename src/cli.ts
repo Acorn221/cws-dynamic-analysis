@@ -131,6 +131,7 @@ program
 // ============================================================
 const query = program
   .command('query')
+  .alias('q')
   .description(
     'Query collected data from a previous analysis run.\n' +
     'All subcommands output JSON to stdout for easy parsing.',
@@ -138,7 +139,7 @@ const query = program
 
 // --- query network ---
 query
-  .command('network')
+  .command('network').alias('net')
   .description(
     'List network requests from the analysis run.\n' +
     'Shows: id, method, url, status, source, phase, flags, canary detections.\n\n' +
@@ -171,7 +172,7 @@ query
 
 // --- query request ---
 query
-  .command('request')
+  .command('request').alias('req')
   .description(
     'Get full details for a specific network request by ID.\n' +
     'Includes headers, body preview, response body, canary matches.\n' +
@@ -190,7 +191,7 @@ query
 
 // --- query hooks ---
 query
-  .command('hooks')
+  .command('hooks').alias('h')
   .description(
     'List chrome.* API calls and page hook callbacks.\n' +
     'Shows: api name, arguments, return value, caller context.\n\n' +
@@ -218,7 +219,7 @@ query
 
 // --- query canary ---
 query
-  .command('canary')
+  .command('canary').alias('c')
   .description(
     'Show all canary data detections — the strongest exfiltration evidence.\n' +
     'If canary data (planted credentials, CC numbers, etc.) appeared in any\n' +
@@ -238,7 +239,7 @@ query
 
 // --- query domains ---
 query
-  .command('domains')
+  .command('domains').alias('dom')
   .description(
     'List all external domains contacted, sorted by request count.\n' +
     'Excludes chrome-extension:// and localhost requests.',
@@ -251,7 +252,7 @@ query
 
 // --- query console ---
 query
-  .command('console')
+  .command('console').alias('log')
   .description(
     'List console log entries from the analysis run.\n' +
     'Reads from console.json written at the end of analysis.\n\n' +
@@ -281,7 +282,7 @@ query
 
 // --- query manifest ---
 query
-  .command('manifest')
+  .command('manifest').alias('man')
   .description(
     'Show extension metadata and run configuration from summary.json.\n' +
     'Includes: extension ID, run timing, scenario config, network/API stats.',
@@ -294,7 +295,7 @@ query
 
 // --- query summary ---
 query
-  .command('summary')
+  .command('summary').alias('sum')
   .description('Print the LLM-formatted summary from a previous run.')
   .argument('<output-dir>', 'Path to analysis output directory')
   .action(async (outputDir: string) => {
@@ -304,7 +305,7 @@ query
 
 // --- query stats ---
 query
-  .command('stats')
+  .command('stats').alias('st')
   .description('Print run statistics (event counts, domains, API usage).')
   .argument('<output-dir>', 'Path to analysis output directory')
   .action(async (outputDir: string) => {
@@ -323,7 +324,7 @@ import {
 } from './interact.js';
 
 const interact = program
-  .command('interact')
+  .command('interact').alias('i')
   .description(
     'Drive extension popup/options UI via CLI commands.\n' +
     'A Claude Code agent uses these to navigate onboarding flows.\n\n' +
@@ -336,7 +337,7 @@ const interact = program
   );
 
 interact
-  .command('start')
+  .command('start').alias('s')
   .description('Launch Chrome with extension, open popup, print DOM snapshot.')
   .argument('<extension-path>', 'Path to unpacked extension directory')
   .option('-o, --output <dir>', 'Session directory', './interact-session')
@@ -351,7 +352,7 @@ interact
   });
 
 interact
-  .command('action')
+  .command('action').alias('a')
   .description(
     'Execute an action on the extension page and print new DOM.\n\n' +
     'Action JSON format:\n' +
@@ -370,7 +371,7 @@ interact
   });
 
 interact
-  .command('snapshot')
+  .command('snapshot').alias('snap')
   .description('Re-print the current DOM snapshot of the extension page.')
   .argument('<session-dir>', 'Session directory from interact start')
   .action(async (sessionDir: string) => {
@@ -379,7 +380,7 @@ interact
   });
 
 interact
-  .command('stop')
+  .command('stop').alias('x')
   .description('Close the browser and end the interactive session.')
   .argument('<session-dir>', 'Session directory from interact start')
   .action(async (sessionDir: string) => {

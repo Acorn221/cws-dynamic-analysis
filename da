@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Short alias: `da` instead of `node dist/cli.js`
+# Usage: da run /path/to/ext ...
+#        da i start /path/to/ext ...   (i = interact)
+#        da q network ./out ...         (q = query)
+exec node "$(dirname "$0")/dist/cli.js" "$@"
