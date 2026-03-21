@@ -1,0 +1,79 @@
+{
+  "runId": "c717e685-bdad-4087-a1da-8e9485e2e46c",
+  "extensionId": "gikagkkapdcppblopekkcnigdjknkadm",
+  "startedAt": "2026-03-21T23:40:51.376Z",
+  "finishedAt": "2026-03-21T23:43:38.441Z",
+  "durationSeconds": 167,
+  "status": "completed",
+  "scenarioConfig": {
+    "phasesRun": [
+      "browse",
+      "login",
+      "banking",
+      "shopping"
+    ],
+    "totalDurationSeconds": 167,
+    "sitesVisited": [
+      "https://www.google.com",
+      "https://www.amazon.com",
+      "https://www.facebook.com",
+      "https://www.reddit.com",
+      "https://en.wikipedia.org",
+      "https://www.github.com",
+      "https://mail.google.com",
+      "https://www.youtube.com"
+    ],
+    "formsInteracted": 3,
+    "timeAccelerated": true
+  },
+  "networkStats": {
+    "totalRequests": 651,
+    "externalDomains": [
+      "1c5c1ecf7303.1a6c481c.eu-west-2.token.awswaf.com",
+      "accounts.google.com",
+      "analytics.falais.com",
+      "api.github.com",
+      "collector.github.com",
+      "en.wikipedia.org",
+      "fls-na.amazon.com",
+      "fonts.googleapis.com",
+      "fonts.gstatic.com",
+      "github.com",
+      "github.githubassets.com",
+      "i.ytimg.com",
+      "images-na.ssl-images-amazon.com",
+      "m.media-amazon.com",
+      "ogads-pa.clients6.google.com",
+      "play.google.com",
+      "rr5---sn-t0a7lnee.googlevideo.com",
+      "ssl.gstatic.com",
+      "static.xx.fbcdn.net",
+      "unagi.amazon.com",
+      "upload.wikimedia.org",
+      "www.amazon.com",
+      "www.facebook.com",
+      "www.google.com",
+      "www.gstatic.com",
+      "www.instagram.com",
+      "www.reddit.com",
+      "www.youtube.com"
+    ],
+    "flaggedRequests": 4,
+    "blockedRequests": 0,
+    "totalBytesOut": 0,
+    "totalBytesIn": 0
+  },
+  "apiHookStats": {
+    "totalCalls": 171,
+    "byApi": {
+      "page.xhr": 20,
+      "page.cookie": 104,
+      "page.sendBeacon": 18,
+      "page.fetch": 24,
+      "page.input": 5
+    },
+    "sensitiveApis": []
+  },
+  "canaryDetections": 0,
+  "rawLogPath": "/tmp/uv-results/events.jsonl"
+}

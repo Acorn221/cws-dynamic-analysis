@@ -14,6 +14,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "test": "bash test/smoke.sh",
     "analyze": "node dist/cli.js",
     "mcp": "node dist/mcp-server.js",
     "lint": "eslint src/",

@@ -68,6 +68,7 @@ program
   .option('--no-stealth', 'Disable puppeteer-extra-plugin-stealth')
   .option('--no-instrument', 'Skip source rewriting (use runtime injection only)')
   .option('--session <dir>', 'Reuse browser from an interact session (same profile/state)')
+  .option('--quick', 'Quick mode: 30s, browse+login only, for testing tool changes', false)
   .option('--duration <seconds>', 'Max scenario duration in seconds', '120')
   .option('--chrome-path <path>', 'Chrome binary path (auto-detected if omitted)')
   .option('--interact-model <model>', 'Model for extension UI interaction', 'claude-haiku-4-5-20251001')
@@ -98,8 +99,13 @@ program
     config.instrument = opts.instrument !== false;
     config.sessionDir = opts.session ? resolve(opts.session) : undefined;
     config.browser.executablePath = opts.chromePath;
-    config.scenario.maxDuration = parseInt(opts.duration, 10);
-    config.scenario.phases = opts.phases.split(',').map((s: string) => s.trim()) as PhaseId[];
+    if (opts.quick) {
+      config.scenario.maxDuration = 30;
+      config.scenario.phases = ['browse', 'login'] as PhaseId[];
+    } else {
+      config.scenario.maxDuration = parseInt(opts.duration, 10);
+      config.scenario.phases = opts.phases.split(',').map((s: string) => s.trim()) as PhaseId[];
+    }
     if (opts.interactModel) config.analysis.triageModel = opts.interactModel;
 
     logger.info({
