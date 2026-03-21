@@ -100,19 +100,46 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       await writeFile(join(config.outputDir, 'manifest.json'), manifest);
     } catch { /* manifest may not be readable */ }
 
-    // 2. Find the service worker (may already be running)
+    // 2. Find and instrument the service worker.
+    // When using --session, the SW is already running and we missed its
+    // initial requests. Fix: terminate it and wait for restart so we can
+    // attach CDP monitoring BEFORE it makes any requests.
     const swFilter = (t: Target) =>
       t.type() === 'service_worker' && t.url().startsWith('chrome-extension://');
-    let swTarget = browser.targets().find(swFilter as any) as Target;
+
+    let existingSW = browser.targets().find(swFilter as any) as Target | undefined;
+
+    if (existingSW && config.sessionDir) {
+      // Kill the existing SW so it restarts fresh with our monitoring
+      log.info('Terminating existing service worker for fresh instrumentation...');
+      try {
+        const tempCdp = await existingSW.createCDPSession();
+        // Terminate the SW by closing the inspector, which causes Chrome to
+        // stop the worker. It will restart on the next event (alarm, navigation).
+        await tempCdp.send('Runtime.terminateExecution').catch(() => {});
+        await tempCdp.detach().catch(() => {});
+      } catch { /* SW may already be gone */ }
+
+      // Wait for the old one to die
+      await new Promise((r) => setTimeout(r, 2000));
+
+      // Trigger SW restart by navigating a page (triggers webNavigation events)
+      const pages = await browser.pages();
+      const triggerPage = pages[0] ?? await browser.newPage();
+      await triggerPage.goto('https://www.example.com', { waitUntil: 'load', timeout: 10000 }).catch(() => {});
+
+      log.info('Waiting for service worker to restart...');
+    }
+
+    // Wait for (restarted or new) SW
+    let swTarget = browser.targets().find(swFilter as any) as Target | undefined;
     if (!swTarget) {
-      swTarget = await browser.waitForTarget(swFilter, { timeout: 30_000 });
+      swTarget = await browser.waitForTarget(swFilter, { timeout: 30_000 }) as Target;
     }
 
     const swCdp = await swTarget.createCDPSession();
 
     // Inject keep-alive to prevent SW from terminating during analysis.
-    // Must be done via CDP (not source rewriting) because CWS extensions
-    // have verified_contents.json that rejects modified files.
     await swCdp.send('Runtime.enable');
     await swCdp.send('Runtime.evaluate', {
       expression: 'setInterval(()=>{},20000)',
