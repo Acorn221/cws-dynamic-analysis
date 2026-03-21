@@ -79,7 +79,9 @@ export class EventBuffer {
     );
     return {
       totalNetworkRequests: this.networkRequests.length,
-      extensionRequests: this.networkRequests.filter((r) => r.source === 'extension').length,
+      extensionRequests: this.networkRequests.filter((r) =>
+        r.source === 'bgsw' || r.source === 'cs' || r.source === 'ext-page' || r.source === 'sandbox',
+      ).length,
       externalDomains: this.getExternalDomains(),
       flaggedRequests: this.getFlaggedRequests().length,
       totalApiCalls: this.apiCalls.length,

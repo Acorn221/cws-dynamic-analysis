@@ -117,13 +117,13 @@ export class Detector {
       const body = request.bodyPreview ?? '';
       const domain = extractDomain(request.url);
       const source = (request as any).source as string | undefined;
+      const isExtension = source === 'bgsw' || source === 'cs' || source === 'ext-page' || source === 'sandbox';
 
       // Pattern-based flags only fire when the request comes from an
-      // extension OR targets a domain that isn't known-benign.  This
-      // eliminates FPs from AWS WAF tokens, Amazon telemetry, YouTube
-      // integrity tokens, Facebook analytics, etc.
+      // extension context OR targets a domain that isn't known-benign.
+      // This eliminates FPs from AWS WAF tokens, Amazon telemetry, etc.
       const isBenignTarget =
-        source !== 'extension' &&
+        !isExtension &&
         (BENIGN_DOMAINS.has(domain) ||
           BENIGN_URL_PATTERNS.some((re) => re.test(request.url)));
 

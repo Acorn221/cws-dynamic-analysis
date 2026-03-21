@@ -140,6 +140,7 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
         args: data.args ?? [],
         returnValueSummary: data.result != null ? JSON.stringify(data.result).slice(0, 200) : undefined,
         callerContext: 'service_worker',
+        source: 'bgsw',
         relatedEvents: [],
         phase: phaseTracker.current,
       };
@@ -302,6 +303,7 @@ async function instrumentPage(
   try {
     const cdp = await page.createCDPSession();
 
+    const currentPageUrl = page.url();
     await enableNetworkMonitoring(cdp, 'page', (req: NetworkRequest) => {
       req.phase = phaseTracker.current;
       detector.scan(req);
@@ -310,7 +312,7 @@ async function instrumentPage(
       }
       buffer.addNetworkRequest(req);
       jsonl?.write({ type: 'network', ...req });
-    }, phaseTracker);
+    }, phaseTracker, currentPageUrl);
 
     await injectPageHooks(page);
     page.on('cws:hook' as any, (data: any) => {
@@ -320,6 +322,7 @@ async function instrumentPage(
         api: `page.${data.type}`,
         args: [data.data],
         callerContext: 'page',
+        source: 'page',
         relatedEvents: [],
         phase: phaseTracker.current,
       };

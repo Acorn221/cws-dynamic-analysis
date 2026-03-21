@@ -19,6 +19,14 @@ export type TargetType =
   | 'content_script'
   | 'worker';
 
+export type SourceLabel =
+  | 'bgsw'       // background service worker
+  | 'cs'         // content script
+  | 'ext-page'   // extension popup / options / side panel
+  | 'page'       // main-world page JS
+  | 'sandbox'    // sandboxed extension page
+  | 'unknown';
+
 /** Network request captured via CDP Network domain */
 export interface NetworkRequest {
   id: string;
@@ -32,8 +40,16 @@ export interface NetworkRequest {
   bodyPreview?: string;
   responseBodyPreview?: string;
   targetType: TargetType;
-  /** Whether this request originated from the extension or the page */
-  source: 'extension' | 'page' | 'unknown';
+  /**
+   * Origin context label:
+   *   bgsw      — background service worker
+   *   cs        — content script (extension code running in page)
+   *   ext-page  — extension popup, options page, or side panel
+   *   page      — main-world page JavaScript
+   *   sandbox   — sandboxed extension page
+   *   unknown   — could not determine
+   */
+  source: SourceLabel;
   /** Which scenario phase was active when this request was made */
   phase?: string;
   flagged: boolean;
@@ -57,6 +73,8 @@ export interface ApiCall {
   args: unknown[];
   returnValueSummary?: string;
   callerContext: TargetType;
+  /** Origin label: bgsw, cs, ext-page, page, sandbox, unknown */
+  source?: SourceLabel;
   /** Which scenario phase was active when this call was made */
   phase?: string;
   relatedEvents: string[];

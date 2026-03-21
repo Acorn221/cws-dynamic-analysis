@@ -1,5 +1,11 @@
 import type { EventBuffer } from './buffer.js';
 import type { RunConfig } from '../types/config.js';
+import type { SourceLabel } from '../types/events.js';
+
+const EXT_SOURCES: SourceLabel[] = ['bgsw', 'cs', 'ext-page', 'sandbox'];
+function isExtSource(s?: string): boolean {
+  return EXT_SOURCES.includes(s as SourceLabel);
+}
 
 /**
  * Compresses the full event buffer into a structured summary
@@ -40,13 +46,13 @@ export function summarizeForLLM(
   }
 
   // --- Extension-originated network requests (most important) ---
-  const extRequests = buffer.networkRequests.filter((r) => r.source === 'extension');
+  const extRequests = buffer.networkRequests.filter((r) => isExtSource(r.source));
   if (extRequests.length > 0) {
     sections.push(`## Extension Network Requests (${extRequests.length})`);
     for (const req of extRequests.slice(0, 30)) {
       const flags = req.flagReasons.length ? ` flags=[${req.flagReasons.join(', ')}]` : '';
       sections.push(
-        `- **${req.method} ${truncate(req.url, 120)}** [${req.status ?? '?'}] phase=${req.phase ?? '?'}${flags}` +
+        `- [${req.source}] **${req.method} ${truncate(req.url, 120)}** [${req.status ?? '?'}] phase=${req.phase ?? '?'}${flags}` +
           (req.bodyPreview
             ? `\n  Body: \`${truncate(req.bodyPreview, 200)}\``
             : ''),
@@ -55,7 +61,7 @@ export function summarizeForLLM(
   }
 
   // --- Flagged page requests (secondary) ---
-  const flaggedPage = buffer.getFlaggedRequests().filter((r) => r.source !== 'extension');
+  const flaggedPage = buffer.getFlaggedRequests().filter((r) => !isExtSource(r.source));
   if (flaggedPage.length > 0) {
     sections.push(`## Flagged Page Requests (${flaggedPage.length})`);
     for (const req of flaggedPage.slice(0, 15)) {
@@ -152,7 +158,7 @@ function computeVerdict(
     };
   }
 
-  const extRequests = buffer.networkRequests.filter((r) => r.source === 'extension');
+  const extRequests = buffer.networkRequests.filter((r) => isExtSource(r.source));
   const extFlagged = extRequests.filter((r) => r.flagged);
 
   if (extFlagged.length > 0) {

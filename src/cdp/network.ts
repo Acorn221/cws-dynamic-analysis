@@ -1,5 +1,5 @@
 import type { CDPSession } from 'puppeteer';
-import type { NetworkRequest, TargetType } from '../types/events.js';
+import type { NetworkRequest, TargetType, SourceLabel } from '../types/events.js';
 import type { PhaseTracker } from '../scenario/phase-tracker.js';
 import { logger } from '../logger.js';
 
@@ -8,37 +8,50 @@ const log = logger.child({ component: 'network' });
 export type NetworkEventHandler = (request: NetworkRequest) => void;
 
 /**
- * Determine whether a network request originated from the extension or the page.
+ * Detect granular origin context for a network request.
+ *
+ * Labels:
+ *   bgsw     — background service worker
+ *   cs       — content script (extension JS running in page context)
+ *   ext-page — extension popup, options page, side panel
+ *   page     — main-world page JavaScript
+ *   sandbox  — sandboxed extension page
+ *   unknown  — can't determine
+ *
+ * @param pageUrl — the URL of the page/target the session is attached to
  */
 function detectSource(
   targetType: TargetType,
   initiatorUrl?: string,
   stackTrace?: string,
-): 'extension' | 'page' | 'unknown' {
-  // Service workers and background pages are always extension context
+  pageUrl?: string,
+): SourceLabel {
+  // Service workers / background pages → bgsw
   if (targetType === 'service_worker' || targetType === 'background_page') {
-    return 'extension';
+    return 'bgsw';
   }
 
-  // Check initiator URL for chrome-extension:// scheme
-  if (initiatorUrl && initiatorUrl.startsWith('chrome-extension://')) {
-    return 'extension';
+  // If the page itself is a chrome-extension:// URL → ext-page
+  if (pageUrl?.startsWith('chrome-extension://')) {
+    // Could be sandbox if the manifest declares it
+    if (pageUrl.includes('sandbox')) return 'sandbox';
+    return 'ext-page';
   }
 
-  // Check stack trace for chrome-extension:// references
-  if (stackTrace && stackTrace.includes('chrome-extension://')) {
-    return 'extension';
+  // Page target but initiator is chrome-extension:// → content script
+  if (initiatorUrl?.startsWith('chrome-extension://')) {
+    return 'cs';
+  }
+  if (stackTrace?.includes('chrome-extension://')) {
+    return 'cs';
   }
 
-  // Popup and content_script contexts are extension-originated
-  if (targetType === 'popup' || targetType === 'content_script') {
-    return 'extension';
-  }
+  // Explicit popup / content_script target types
+  if (targetType === 'popup') return 'ext-page';
+  if (targetType === 'content_script') return 'cs';
 
-  // Page target with no extension signals → page traffic
-  if (targetType === 'page') {
-    return 'page';
-  }
+  // Regular page traffic
+  if (targetType === 'page') return 'page';
 
   return 'unknown';
 }
@@ -52,6 +65,7 @@ export async function enableNetworkMonitoring(
   targetType: TargetType,
   onEvent: NetworkEventHandler,
   phaseTracker?: PhaseTracker,
+  pageUrl?: string,
 ): Promise<void> {
   const pendingRequests = new Map<string, Partial<NetworkRequest>>();
 
@@ -76,7 +90,7 @@ export async function enableNetworkMonitoring(
       bodySize: params.request.postDataLength,
       bodyPreview: params.request.postData?.slice(0, 2000),
       targetType,
-      source: detectSource(targetType, initiatorUrl, stackTrace),
+      source: detectSource(targetType, initiatorUrl, stackTrace, pageUrl ?? params.documentURL),
       phase: phaseTracker?.current,
       initiator: {
         type: params.initiator?.type ?? 'other',
@@ -132,7 +146,7 @@ export async function enableNetworkMonitoring(
       url: params.url,
       method: 'WS_CONNECT',
       targetType,
-      source: detectSource(targetType),
+      source: detectSource(targetType, undefined, undefined, pageUrl),
       phase: phaseTracker?.current,
       initiator: { type: 'script' },
       headers: {},
