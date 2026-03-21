@@ -328,7 +328,7 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
     await writeFile(join(config.outputDir, 'console.json'), JSON.stringify(buffer.consoleEntries, null, 2));
 
     await jsonl?.close();
-    sqlite?.close();
+    // sqlite closed in finally block to avoid race with late-arriving events
 
     log.info('=== ANALYSIS COMPLETE ===');
     log.info({
@@ -351,7 +351,6 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
   } catch (err) {
     log.error({ err }, 'Analysis failed');
     await jsonl?.close();
-    sqlite?.close();
 
     const finishedAt = new Date().toISOString();
     const summary: RunSummary = {
@@ -373,6 +372,8 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
     await writeFile(join(config.outputDir, 'summary.json'), JSON.stringify(summary, null, 2));
     throw err;
   } finally {
+    // Close sqlite first (late events may still arrive before browser closes)
+    try { sqlite?.close(); } catch { /* may already be closed */ }
     // Only close browser if we launched it (not if we connected to a session)
     if (browser && !config.sessionDir) await closeBrowser(browser);
     await stopCanaryServer();
