@@ -1,0 +1,43 @@
+{
+  "name": "cws-dynamic-analysis",
+  "version": "0.1.0",
+  "description": "Automated dynamic analysis pipeline for Chrome extensions using CDP + LLM",
+  "type": "module",
+  "bin": {
+    "cws-dynamic-analyze": "./dist/cli.js",
+    "cws-dynamic-mcp": "./dist/mcp-server.js"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./mcp": "./dist/mcp-server.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "analyze": "node dist/cli.js",
+    "mcp": "node dist/mcp-server.js",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "puppeteer": "^24.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "puppeteer-cluster": "^0.24.0",
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "commander": "^13.0.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^13.0.0",
+    "glob": "^11.0.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

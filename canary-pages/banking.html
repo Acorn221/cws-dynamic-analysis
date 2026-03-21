@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Online Banking — SecureBank</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f0f4f8; margin: 0; }
+    .header { background: #1a365d; color: white; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 18px; margin: 0; }
+    .container { max-width: 800px; margin: 24px auto; padding: 0 24px; }
+    .card { background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 20px; }
+    .balance { font-size: 36px; font-weight: 700; color: #1a365d; }
+    .account-info { color: #666; font-size: 14px; margin-top: 4px; }
+    h2 { font-size: 18px; margin: 0 0 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    td, th { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; font-size: 14px; }
+    th { font-weight: 600; color: #666; }
+    .debit { color: #e53e3e; }
+    .credit { color: #38a169; }
+    label { display: block; margin-bottom: 6px; font-weight: 500; font-size: 14px; }
+    input, select { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; margin-bottom: 12px; box-sizing: border-box; }
+    button { padding: 10px 20px; background: #1a365d; color: white; border: none; border-radius: 4px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>SecureBank Online</h1>
+    <span>Welcome, Test User</span>
+  </div>
+  <div class="container">
+    <div class="card">
+      <div class="account-info">Checking Account •••• 4829</div>
+      <div class="balance">$24,518.73</div>
+      <div class="account-info">Account: 0284-9173-5521 | Routing: 021000021</div>
+    </div>
+
+    <div class="card">
+      <h2>Recent Transactions</h2>
+      <table>
+        <tr><th>Date</th><th>Description</th><th>Amount</th></tr>
+        <tr><td>Mar 20</td><td>Direct Deposit — Employer Inc</td><td class="credit">+$3,241.50</td></tr>
+        <tr><td>Mar 19</td><td>Amazon.com</td><td class="debit">-$89.42</td></tr>
+        <tr><td>Mar 18</td><td>Whole Foods Market</td><td class="debit">-$67.23</td></tr>
+        <tr><td>Mar 17</td><td>Electric Company</td><td class="debit">-$142.00</td></tr>
+        <tr><td>Mar 15</td><td>Transfer from Savings</td><td class="credit">+$500.00</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Transfer Funds</h2>
+      <form id="transferForm" action="/banking/transfer" method="POST">
+        <label for="toAccount">Recipient Account</label>
+        <input type="text" id="toAccount" name="to_account" placeholder="Account number">
+
+        <label for="routingNumber">Routing Number</label>
+        <input type="text" id="routingNumber" name="routing_number" placeholder="Routing number">
+
+        <label for="amount">Amount ($)</label>
+        <input type="number" id="amount" name="amount" step="0.01" placeholder="0.00">
+
+        <button type="submit">Transfer</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('transferForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+    });
+  </script>
+</body>
+</html>

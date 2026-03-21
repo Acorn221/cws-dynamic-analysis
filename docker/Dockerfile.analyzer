@@ -1,0 +1,48 @@
+FROM node:20-slim
+
+# Install Chrome + Xvfb + fonts
+RUN apt-get update && apt-get install -y \
+    wget gnupg2 \
+    && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update && apt-get install -y \
+    google-chrome-stable \
+    xvfb \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    libnss3 \
+    libgbm1 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user for Chrome sandbox
+RUN groupadd -r analyzer && useradd -r -g analyzer -G audio,video analyzer \
+    && mkdir -p /home/analyzer && chown -R analyzer:analyzer /home/analyzer
+
+WORKDIR /app
+
+# Install dependencies
+COPY package.json package-lock.json* ./
+RUN npm ci --production
+
+# Copy built app + hooks + canary pages
+COPY dist/ ./dist/
+COPY hooks/ ./hooks/
+COPY canary-pages/ ./canary-pages/
+
+# Output directory (mount as volume)
+RUN mkdir -p /output && chown analyzer:analyzer /output
+VOLUME /output
+
+# Extension directory (mount as volume)
+VOLUME /extension
+
+USER analyzer
+
+ENV DISPLAY=:99
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+
+# Start Xvfb then run analysis
+ENTRYPOINT ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp & sleep 1 && exec node dist/cli.js run /extension \"$@\"", "--"]

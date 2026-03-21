@@ -1,0 +1,36 @@
+services:
+  analyzer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.analyzer
+    cap_add:
+      - SYS_ADMIN  # Required for Chrome sandbox
+    init: true
+    ipc: host
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.5'
+    volumes:
+      - ${EXTENSION_PATH:?Set EXTENSION_PATH}:/extension:ro
+      - ${OUTPUT_DIR:-./output}:/output
+    environment:
+      - EXTENSION_ID=${EXTENSION_ID:?Set EXTENSION_ID}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    # No internet access by default — uncomment network for isolation
+    # networks:
+    #   - sandbox
+    #
+    # mitmproxy:
+    #   image: mitmproxy/mitmproxy:latest
+    #   command: mitmdump --set block_global=false
+    #   networks:
+    #     - sandbox
+    #     - external
+
+# networks:
+#   sandbox:
+#     internal: true  # No internet access for analyzer
+#   external:
+#     driver: bridge
