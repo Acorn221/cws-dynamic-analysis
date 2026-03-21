@@ -6,8 +6,20 @@ import { logger } from '../logger.js';
 
 const log = logger.child({ component: 'hooks' });
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const HOOKS_DIR = resolve(__dirname, '../../hooks');
+// Find hooks dir: try relative to the compiled output, then fall back to cwd
+import { statSync } from 'node:fs';
+function findHooksDir(): string {
+  const thisDir = dirname(fileURLToPath(import.meta.url));
+  for (const candidate of [
+    resolve(thisDir, '../hooks'),
+    resolve(thisDir, '../../hooks'),
+    resolve(process.cwd(), 'hooks'),
+  ]) {
+    try { statSync(resolve(candidate, 'sw-hooks.js')); return candidate; } catch {}
+  }
+  return resolve(process.cwd(), 'hooks');
+}
+const HOOKS_DIR = findHooksDir();
 
 /**
  * Inject page-side hooks via Page.addScriptToEvaluateOnNewDocument.

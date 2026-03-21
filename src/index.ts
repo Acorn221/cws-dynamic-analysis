@@ -1,4 +1,5 @@
-// Public API — importable by other packages
+// Public API
+export { analyze } from './analyzer.js';
 export { launchBrowser, closeBrowser } from './cdp/browser.js';
 export { SessionManager } from './cdp/sessions.js';
 export { enableNetworkMonitoring } from './cdp/network.js';

@@ -25,6 +25,7 @@ export async function launchBrowser(
   const args = [
     `--disable-extensions-except=${extensionPath}`,
     `--load-extension=${extensionPath}`,
+    '--no-sandbox',  // Required on Ubuntu 23.10+ (AppArmor blocks user namespaces)
     '--no-first-run',
     '--disable-default-apps',
     '--disable-component-update',
