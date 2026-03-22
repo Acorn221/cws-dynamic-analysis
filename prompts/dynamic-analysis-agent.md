@@ -24,10 +24,9 @@ da click /tmp/s '{"action":"click","selector":"SELECTOR"}'
 
 RULES:
 - Max 8 actions. If not done by then, move on.
-- No background commands. No code edits.
+- No background commands. No code edits. No reading tool source code.
 - If error/timeout → Phase 2 without --session.
-- Skip product tours/walkthroughs — just close them (click X or dismiss). Only interact with ToS/privacy/setup.
-- Don't query the same thing twice.
+- Tours auto-dismiss. Only interact with ToS/privacy/setup.
 
 ## PHASE 2: SCENARIO (~90s)
 
@@ -37,16 +36,15 @@ da run {EXT_PATH} -o /tmp/r --session /tmp/s --duration 90 --phases browse,login
 
 ## PHASE 3: INVESTIGATE
 
+Start with triage (one command, replaces 10+ queries):
 ```bash
-da summary /tmp/r
-da net /tmp/r --source bgsw
-da net /tmp/r --source cs
-da net /tmp/r --domain {DOMAIN}
-da domains /tmp/r
-da canary /tmp/r
-da hooks /tmp/r --api chrome --unique
-da log /tmp/r --source extension
-da manifest /tmp/r
+da triage /tmp/r
+```
+
+Then drill into specifics only if needed:
+```bash
+da sql /tmp/r "SELECT id, method, url, body FROM requests WHERE source='bgsw'"
+da sql /tmp/r "SELECT * FROM canary"
 da req /tmp/r REQUEST_ID
 ```
 
