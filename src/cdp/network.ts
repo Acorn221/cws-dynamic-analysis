@@ -21,7 +21,8 @@ export type NetworkEventHandler = (request: NetworkRequest) => void;
  *
  * @param pageUrl — the URL of the page/target the session is attached to
  */
-function detectSource(
+/** @internal exported for testing */
+export function detectSource(
   targetType: TargetType,
   initiatorUrl?: string,
   stackTrace?: string,

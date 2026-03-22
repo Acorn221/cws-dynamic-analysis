@@ -14,7 +14,10 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "bash test/smoke.sh",
+    "test": "vitest run && bash test/smoke.sh",
+    "test:unit": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:smoke": "bash test/smoke.sh",
     "analyze": "node dist/cli.js",
     "mcp": "node dist/mcp-server.js",
     "lint": "eslint src/",
@@ -39,7 +42,8 @@
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0"
   },
   "engines": {
     "node": ">=20"
