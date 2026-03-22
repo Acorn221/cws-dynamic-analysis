@@ -130,7 +130,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     const swFilter = (t: Target) =>
       t.type() === 'service_worker' && t.url().startsWith('chrome-extension://');
 
-    let existingSW = browser.targets().find(swFilter as any) as Target | undefined;
+    let existingSW = browser.targets().find((t) => swFilter(t as Target)) as Target | undefined;
 
     if (existingSW && config.sessionDir) {
       // Kill the existing SW so it restarts fresh with our monitoring
@@ -155,7 +155,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     }
 
     // Wait for (restarted or new) SW
-    let swTarget = browser.targets().find(swFilter as any) as Target | undefined;
+    let swTarget = browser.targets().find((t) => swFilter(t as Target)) as Target | undefined;
     if (!swTarget) {
       swTarget = await browser.waitForTarget(swFilter, { timeout: 30_000 }) as Target;
     }
@@ -182,8 +182,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     }, phaseTracker);
 
     // Capture SW console messages (separate from page console)
-    // @ts-ignore — CDPSession event type
-swCdp.on('Runtime.consoleAPICalled', (event: any) => {
+    (swCdp as any).on('Runtime.consoleAPICalled', (event: any) => {
       // Skip our own hook messages (handled by onServiceWorkerHookCallback)
       const firstArg = event.args?.[0];
       if (firstArg?.value === '[CWS_HOOK]') return;

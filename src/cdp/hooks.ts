@@ -90,15 +90,14 @@ export function onServiceWorkerHookCallback(
   session: CDPSession,
   handler: (data: any) => void,
 ): void {
-  // @ts-ignore — CDPSession event type
-  session.on('Runtime.consoleAPICalled', (event: any) => {
+  // CDPSession.on() accepts any CDP event name at runtime even though
+  // the TS overloads don't cover all of them. Cast once here.
+  (session as any).on('Runtime.consoleAPICalled', (event: any) => {
     if (event.type !== 'log' || !event.args || event.args.length < 2) return;
 
-    // First arg should be the string '[CWS_HOOK]'
     const prefixArg = event.args[0];
     if (prefixArg?.type !== 'string' || prefixArg?.value !== '[CWS_HOOK]') return;
 
-    // Second arg is the JSON payload string
     const payloadArg = event.args[1];
     if (payloadArg?.type !== 'string') return;
 
