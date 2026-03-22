@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Test: Content Script Fetch",
+  "version": "1.0.0",
+  "description": "Test fixture — content script makes fetch() calls",
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }],
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"]
+}

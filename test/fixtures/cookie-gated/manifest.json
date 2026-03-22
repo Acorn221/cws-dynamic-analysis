@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Test: Cookie-Gated Exfil",
+  "version": "1.0.0",
+  "description": "Test fixture — SW only exfils when auth cookie exists",
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "permissions": ["tabs", "storage", "cookies"],
+  "host_permissions": ["<all_urls>"]
+}

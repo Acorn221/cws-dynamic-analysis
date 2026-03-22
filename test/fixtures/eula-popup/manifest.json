@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Test: EULA Popup Gate",
+  "version": "1.0.0",
+  "description": "Test fixture — behavior gated behind popup EULA acceptance",
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": ["tabs", "storage"],
+  "host_permissions": ["<all_urls>"]
+}
