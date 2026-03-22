@@ -109,11 +109,13 @@ export async function enableNetworkMonitoring(
     pendingRequests.set(p.requestId, req);
   });
 
-  session.on('Network.responseReceived', (params) => {
+  session.on('Network.responseReceived', async (params) => {
     const p = params as unknown as ResponseReceivedParams;
     const req = pendingRequests.get(p.requestId);
     if (!req) return;
     req.status = p.response.status;
+    // Early capture — body may already be available for small responses
+    await captureResponseBody(session, p.requestId, req).catch(() => {});
   });
 
   session.on('Network.loadingFinished', async (params) => {
@@ -122,19 +124,27 @@ export async function enableNetworkMonitoring(
     if (!req) return;
     pendingRequests.delete(p.requestId);
 
-    // Capture full response body now that loading is complete
-    await captureResponseBody(session, p.requestId, req).catch(() => {});
+    // Final capture — body guaranteed complete now
+    if (!req.responseBodyPreview) {
+      await captureResponseBody(session, p.requestId, req).catch(() => {});
+    }
 
     onEvent(req as NetworkRequest);
   });
 
-  session.on('Network.loadingFailed', (params) => {
+  session.on('Network.loadingFailed', async (params) => {
     const p = params as unknown as LoadingFailedParams;
     const req = pendingRequests.get(p.requestId);
     if (!req) return;
     pendingRequests.delete(p.requestId);
     req.status = 0;
     req.flagReasons = [...(req.flagReasons ?? []), `failed: ${p.errorText}`];
+
+    // Try capturing body even for failed/aborted requests —
+    // Chrome often has the response body for ERR_ABORTED
+    if (!req.responseBodyPreview) {
+      await captureResponseBody(session, p.requestId, req).catch(() => {});
+    }
 
     onEvent(req as NetworkRequest);
   });
