@@ -15,6 +15,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import puppeteer, { type Browser, type Page } from 'puppeteer';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { STEALTH_ARGS, applyPageStealth } from './cdp/stealth.js';
 import { logger } from './logger.js';
 
 puppeteerExtra.use(StealthPlugin());
@@ -53,13 +54,9 @@ export async function interactStart(
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
-      '--no-sandbox',
-      '--no-first-run',
-      '--disable-default-apps',
-      '--disable-component-update',
-      '--disable-blink-features=AutomationControlled',
+      ...STEALTH_ARGS,
     ],
-    defaultViewport: { width: 800, height: 600 },
+    defaultViewport: { width: 1440, height: 900 }, // MacBook-like resolution
   });
 
   // Wait for SW
@@ -72,6 +69,17 @@ export async function interactStart(
   }
   const extensionId = new URL(swTarget!.url()).hostname;
   log.info({ extensionId }, 'Extension loaded');
+
+  // Apply stealth to all existing pages + auto-apply to new ones
+  for (const p of await browser.pages()) {
+    await applyPageStealth(p).catch(() => {});
+  }
+  browser.on('targetcreated', async (target) => {
+    if (target.type() === 'page') {
+      const p = await target.page().catch(() => null);
+      if (p) await applyPageStealth(p).catch(() => {});
+    }
+  });
 
   // Keep SW alive
   const swCdp = await swTarget!.createCDPSession();

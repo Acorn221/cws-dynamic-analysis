@@ -2,6 +2,7 @@ import puppeteer, { type Browser, type CDPSession } from 'puppeteer';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import puppeteerExtra from 'puppeteer-extra';
 import { type BrowserConfig } from '../types/config.js';
+import { STEALTH_ARGS, MAC_UA, applyPageStealth } from './stealth.js';
 import { logger } from '../logger.js';
 
 puppeteerExtra.use(StealthPlugin());
@@ -25,17 +26,12 @@ export async function launchBrowser(
   const args = [
     `--disable-extensions-except=${extensionPath}`,
     `--load-extension=${extensionPath}`,
-    '--no-sandbox',  // Required on Ubuntu 23.10+ (AppArmor blocks user namespaces)
-    '--no-first-run',
-    '--disable-default-apps',
-    '--disable-component-update',
+    ...STEALTH_ARGS,
     '--disable-background-networking',
     '--disable-sync',
     '--metrics-recording-only',
     '--no-default-browser-check',
     '--disable-hang-monitor',
-    // Anti-detection: don't advertise automation
-    '--disable-blink-features=AutomationControlled',
     ...config.extraArgs,
   ];
 
@@ -77,6 +73,17 @@ export async function launchBrowser(
   // Extract extension ID from the service worker URL
   const extensionId = new URL(swTarget.url()).hostname;
   log.info({ extensionId }, 'Extension loaded');
+
+  // Apply page-level stealth to all pages + auto-apply to new ones
+  for (const p of await browser.pages()) {
+    await applyPageStealth(p).catch(() => {});
+  }
+  browser.on('targetcreated', async (target) => {
+    if (target.type() === 'page') {
+      const p = await target.page().catch(() => null);
+      if (p) await applyPageStealth(p).catch(() => {});
+    }
+  });
 
   // Create browser-level CDP session for auto-attach
   const browserSession = await (browser as any)
