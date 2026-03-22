@@ -535,6 +535,22 @@ program
   });
 
 // ============================================================
+// TRIAGE — one-shot investigation digest
+// ============================================================
+program
+  .command('triage')
+  .description(
+    'Run all critical queries in one shot. Returns a compact digest.\n' +
+    'Replaces: summary + net --source bgsw + canary + hooks + domains\n\n' +
+    'Usage: da triage /tmp/r',
+  )
+  .argument('<output-dir>', 'Analysis output directory')
+  .action(async (outputDir: string) => {
+    const { triage: triageFn } = await import('./triage.js');
+    console.log(await triageFn(resolve(outputDir)));
+  });
+
+// ============================================================
 // TOP-LEVEL SHORTCUTS — skip 'query' prefix for common commands
 // Single intuitive words, one token each
 // ============================================================

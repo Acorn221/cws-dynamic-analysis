@@ -258,6 +258,19 @@ export async function interactStop(outputDir: string): Promise<void> {
  * Simplified DOM snapshot for LLM consumption.
  */
 async function getSnapshot(page: Page): Promise<string> {
+  // Auto-dismiss product tours (DriverJS, Shepherd, Intro.js)
+  await page.evaluate(() => {
+    // DriverJS
+    document.querySelectorAll('.driver-popover-close-btn, .driver-close-btn').forEach((el) => (el as HTMLElement).click());
+    // Shepherd
+    document.querySelectorAll('.shepherd-cancel-icon, .shepherd-button-secondary').forEach((el) => (el as HTMLElement).click());
+    // Intro.js
+    document.querySelectorAll('.introjs-skipbutton, .introjs-donebutton').forEach((el) => (el as HTMLElement).click());
+    // Generic overlay dismiss
+    document.querySelectorAll('[class*="tour"] [class*="close"], [class*="walkthrough"] [class*="dismiss"]').forEach((el) => (el as HTMLElement).click());
+  }).catch(() => {});
+  await new Promise((r) => setTimeout(r, 300));
+
   const url = page.url();
   const snapshot = await page.evaluate(() => {
     const lines: string[] = [];
