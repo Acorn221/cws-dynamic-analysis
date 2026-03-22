@@ -59,16 +59,17 @@ export async function interactStart(
     defaultViewport: { width: 1440, height: 900 }, // MacBook-like resolution
   });
 
-  // Wait for SW
+  // Wait for background target (service_worker for MV3, background_page for MV2)
   await new Promise((r) => setTimeout(r, 2000));
-  const swFilter = (t: any) =>
-    t.type() === 'service_worker' && t.url().startsWith('chrome-extension://');
-  let swTarget = browser.targets().find(swFilter);
+  const bgFilter = (t: any) =>
+    (t.type() === 'service_worker' || t.type() === 'background_page') &&
+    t.url().startsWith('chrome-extension://');
+  let swTarget = browser.targets().find(bgFilter);
   if (!swTarget) {
-    swTarget = await browser.waitForTarget(swFilter, { timeout: 30_000 });
+    swTarget = await browser.waitForTarget(bgFilter, { timeout: 30_000 });
   }
   const extensionId = new URL(swTarget!.url()).hostname;
-  log.info({ extensionId }, 'Extension loaded');
+  log.info({ extensionId, targetType: swTarget!.type() }, 'Extension loaded');
 
   // Apply stealth to all existing pages + auto-apply to new ones
   for (const p of await browser.pages()) {
@@ -113,7 +114,7 @@ export async function interactStart(
   }
 
   const activePage = (await browser.pages()).find(
-    (p) => p.url().includes(extensionId) && !p.url().includes('service_worker'),
+    (p) => p.url().includes(extensionId) && !p.url().includes('service_worker') && !p.url().includes('_generated_background_page'),
   );
 
   if (activePage) {

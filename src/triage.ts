@@ -68,7 +68,7 @@ export async function triage(outputDir: string): Promise<string> {
 
   // Chrome APIs
   const apis = db.prepare(
-    "SELECT api, count(*) n FROM hooks WHERE source='bgsw' OR caller='service_worker' GROUP BY api ORDER BY n DESC LIMIT 10",
+    "SELECT api, count(*) count FROM hooks WHERE source='bgsw' OR caller='service_worker' GROUP BY api ORDER BY count DESC LIMIT 10",
   ).all() as ApiCountRow[];
   if (apis.length) {
     lines.push(`\nCHROME APIS:`);

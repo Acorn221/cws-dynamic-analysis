@@ -99,10 +99,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       }
 
       log.info('Launching browser...');
-      const { browser: b, extensionId } = await launchBrowser(
-        extensionLoadPath,
-        config.browser,
-      );
+      const { browser: b, extensionId } = await launchBrowser(extensionLoadPath, config.browser);
       browser = b;
 
       if (config.extensionId === 'unknown') {
@@ -123,47 +120,104 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       await writeFile(join(config.outputDir, 'manifest.json'), manifest);
     } catch { /* manifest may not be readable */ }
 
-    // 2. Find and instrument the service worker.
-    // When using --session, the SW is already running and we missed its
-    // initial requests. Fix: terminate it and wait for restart so we can
-    // attach CDP monitoring BEFORE it makes any requests.
-    const swFilter = (t: Target) =>
-      t.type() === 'service_worker' && t.url().startsWith('chrome-extension://');
+    // 2. Instrument the background target (service_worker for MV3, background_page for MV2).
+    //
+    // For fresh launches: launchBrowser() sets up Target.setAutoAttach with
+    // waitForDebuggerOnStart=true, so the SW is PAUSED before any code runs.
+    // We instrument it here and then resume.
+    //
+    // For --session mode: the SW is already running. We terminate it, set up
+    // auto-attach, and trigger a restart to catch it paused.
 
-    let existingSW = browser.targets().find((t) => swFilter(t as Target)) as Target | undefined;
+    const bgFilter = (t: Target) =>
+      (t.type() === 'service_worker' || t.type() === 'background_page') &&
+      t.url().startsWith('chrome-extension://');
 
-    if (existingSW && config.sessionDir) {
-      // Kill the existing SW so it restarts fresh with our monitoring
-      log.info('Terminating existing service worker for fresh instrumentation...');
-      try {
-        const tempCdp = await existingSW.createCDPSession();
-        // Terminate the SW by closing the inspector, which causes Chrome to
-        // stop the worker. It will restart on the next event (alarm, navigation).
-        await tempCdp.send('Runtime.terminateExecution').catch(() => {});
-        await tempCdp.detach().catch(() => {});
-      } catch { /* SW may already be gone */ }
+    let existingSW = browser.targets().find((t) => bgFilter(t as Target)) as Target | undefined;
+    const isMV2Background = existingSW?.type() === 'background_page';
 
-      // Wait for the old one to die
-      await new Promise((r) => setTimeout(r, 2000));
+    let swCdp: CDPSession;
+    let targetType: 'service_worker' | 'background_page';
 
-      // Trigger SW restart by navigating a page (triggers webNavigation events)
-      const pages = await browser.pages();
-      const triggerPage = pages[0] ?? await browser.newPage();
-      await triggerPage.goto('https://www.example.com', { waitUntil: 'load', timeout: 10000 }).catch(() => {});
+    if (isMV2Background) {
+      // MV2 background pages persist — direct attach
+      targetType = 'background_page';
+      log.info('MV2 background page — using direct attach');
+      swCdp = await existingSW!.createCDPSession();
+      await swCdp.send('Runtime.enable');
+    } else if (config.sessionDir) {
+      // --session mode: SW already running, set up auto-attach + restart
+      targetType = 'service_worker';
+      const browserCdp = await (browser as any).target().createCDPSession();
 
-      log.info('Waiting for service worker to restart...');
+      const swAttached = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('SW auto-attach timeout (30s)')), 30_000);
+        let terminated = false;
+
+        (browserCdp as any).on('Target.attachedToTarget', (event: any) => {
+          const { sessionId, targetInfo } = event;
+          const isOurSW = targetInfo.type === 'service_worker' &&
+            targetInfo.url.includes(config.extensionId);
+
+          if (isOurSW && terminated) {
+            clearTimeout(timeout);
+            log.info({ url: targetInfo.url }, 'Session SW restarted and paused');
+            resolve();
+            return;
+          }
+          // Resume non-target or pre-termination targets
+          (browserCdp as any).send('Runtime.runIfWaitingForDebugger', {}, sessionId).catch(() => {});
+        });
+
+        // Enable auto-attach, terminate, trigger restart
+        browserCdp.send('Target.setAutoAttach' as any, {
+          autoAttach: true, waitForDebuggerOnStart: true, flatten: true,
+          filter: [{ type: 'service_worker', exclude: false }, { type: 'page', exclude: false }],
+        }).then(async () => {
+          if (existingSW) {
+            const tmp = await existingSW!.createCDPSession().catch(() => null);
+            if (tmp) {
+              await tmp.send('Runtime.terminateExecution').catch(() => {});
+              await tmp.detach().catch(() => {});
+            }
+          }
+          terminated = true;
+          await new Promise((r) => setTimeout(r, 1500));
+          const pages = await browser!.pages();
+          const p = pages[0] ?? await browser!.newPage();
+          await p.goto('https://www.example.com', { waitUntil: 'load', timeout: 10000 }).catch(() => {});
+        });
+      });
+
+      await swAttached;
+
+      // Find the restarted SW target
+      let swTarget = browser.targets().find((t) => bgFilter(t as Target)) as Target | undefined;
+      if (!swTarget) {
+        await new Promise((r) => setTimeout(r, 500));
+        swTarget = browser.targets().find((t) => bgFilter(t as Target)) as Target | undefined;
+      }
+      swCdp = swTarget ? await swTarget.createCDPSession() : browserCdp;
+      await swCdp.send('Runtime.enable');
+
+      await browserCdp.send('Target.setAutoAttach' as any, {
+        autoAttach: false, waitForDebuggerOnStart: false, flatten: true,
+      }).catch(() => {});
+    } else {
+      // Fresh launch: create a fresh CDP session to the SW target.
+      targetType = 'service_worker';
+      let swTarget = browser.targets().find((t) => bgFilter(t as Target)) as Target | undefined;
+      if (!swTarget) {
+        swTarget = await browser.waitForTarget(bgFilter, { timeout: 30_000 }) as Target;
+      }
+      swCdp = await swTarget.createCDPSession();
+      await swCdp.send('Runtime.enable');
     }
 
-    // Wait for (restarted or new) SW
-    let swTarget = browser.targets().find((t) => swFilter(t as Target)) as Target | undefined;
-    if (!swTarget) {
-      swTarget = await browser.waitForTarget(swFilter, { timeout: 30_000 }) as Target;
-    }
-
-    const swCdp = await swTarget.createCDPSession();
+    log.info({ targetType }, 'Background target found (paused)');
 
     // Inject keep-alive to prevent SW from terminating during analysis.
-    await swCdp.send('Runtime.enable');
+    // (Injected while still paused — runs when we resume)
     await swCdp.send('Runtime.evaluate', {
       expression: 'setInterval(()=>{},20000)',
       awaitPromise: false,
@@ -175,8 +229,8 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       await enableOverrides(swCdp, config.overrides);
     }
 
-    // Enable network monitoring on service worker (with phase tracker)
-    await enableNetworkMonitoring(swCdp, 'service_worker', (req: NetworkRequest) => {
+    // Enable network monitoring on SW target
+    await enableNetworkMonitoring(swCdp, targetType, (req: NetworkRequest) => {
       req.phase = phaseTracker.current;
       sink.request(req);
     }, phaseTracker);
@@ -199,8 +253,8 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       });
     });
 
-    // Inject chrome.* API hooks into service worker via Runtime.evaluate
-    // (must happen after Runtime.enable so console.log events are captured)
+    // Inject chrome.* API hooks into service worker via Runtime.evaluate.
+    // This also calls Runtime.runIfWaitingForDebugger to resume the SW.
     await injectServiceWorkerHooks(swCdp, false);
 
     onServiceWorkerHookCallback(swCdp, (data: any) => {
@@ -210,13 +264,18 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
         api: data.api,
         args: data.args ?? [],
         returnValueSummary: data.result != null ? JSON.stringify(data.result).slice(0, 200) : undefined,
-        callerContext: 'service_worker',
+        callerContext: isMV2Background ? 'background_page' : 'service_worker',
         source: 'bgsw',
         relatedEvents: [],
         phase: phaseTracker.current,
       };
       sink.hook(call);
     });
+
+    // For MV2 background pages, we need to resume manually (no auto-attach pause)
+    if (isMV2Background) {
+      await swCdp.send('Runtime.runIfWaitingForDebugger').catch(() => {});
+    }
 
     // Inject time acceleration if enabled (skip for --session runs — we want
     // to observe natural behavior after onboarding, not break Date.now)
@@ -232,7 +291,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       }
     }
 
-    log.info('Service worker instrumented');
+    log.info({ targetType }, 'Background target instrumented (resumed)');
 
     // 3. Get main page and instrument it
     const pages = await browser.pages();

@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Test: Delayed Fetch",
+  "version": "1.0.0",
+  "description": "Test fixture — SW fetches config then exfils periodically",
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["<all_urls>"]
+}

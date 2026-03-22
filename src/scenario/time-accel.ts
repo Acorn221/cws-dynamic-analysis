@@ -31,14 +31,9 @@ export async function injectTimeOverride(
 
         Date.now = function() { return origNow() + offset; };
 
-        globalThis.Date = function(...args) {
-          if (args.length === 0) return new OrigDate(origNow() + offset);
-          return new OrigDate(...args);
-        };
-        globalThis.Date.now = Date.now;
-        globalThis.Date.parse = OrigDate.parse;
-        globalThis.Date.UTC = OrigDate.UTC;
-        globalThis.Date.prototype = OrigDate.prototype;
+        // Only override Date.now, not the Date constructor.
+        // Replacing globalThis.Date breaks internal Chrome APIs and crashes SWs.
+        // Date.now offset is sufficient for triggering time-bomb behavior.
       })();
     `,
     awaitPromise: false,
@@ -57,13 +52,15 @@ export async function accelerateAlarms(session: CDPSession): Promise<void> {
       (function() {
         if (typeof chrome === 'undefined' || !chrome.alarms) return;
         const orig = chrome.alarms.create;
+        if (!orig) return;
         chrome.alarms.create = function(name, info) {
-          if (chrome.alarms.onAlarm) {
-            setTimeout(() => {
-              chrome.alarms.onAlarm.dispatch({ name, scheduledTime: Date.now() });
-            }, 100);
+          // Just set a very short delay — don't try to dispatch manually
+          // (chrome.alarms.onAlarm.dispatch doesn't exist and crashes the SW)
+          try {
+            return orig.call(this, name, { delayInMinutes: 0.01 });
+          } catch(e) {
+            return orig.call(this, name, info);
           }
-          return orig.call(this, name, { delayInMinutes: 0.01 });
         };
       })();
     `,

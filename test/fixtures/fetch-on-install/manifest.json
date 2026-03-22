@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Test: Fetch on Install",
+  "version": "1.0.0",
+  "description": "Test fixture — SW makes fetch() immediately on startup",
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"]
+}

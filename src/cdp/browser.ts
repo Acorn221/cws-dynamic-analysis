@@ -10,12 +10,11 @@ puppeteerExtra.use(StealthPlugin());
 export interface LaunchResult {
   browser: Browser;
   extensionId: string;
-  browserSession: CDPSession;
 }
 
 /**
- * Launch Chrome with an extension loaded and return the browser instance
- * plus a browser-level CDP session with auto-attach configured.
+ * Launch Chrome with an extension loaded.
+ * Returns the browser and extension ID once the service worker is detected.
  */
 export async function launchBrowser(
   extensionPath: string,
@@ -27,7 +26,6 @@ export async function launchBrowser(
     `--disable-extensions-except=${extensionPath}`,
     `--load-extension=${extensionPath}`,
     ...STEALTH_ARGS,
-    '--disable-background-networking',
     '--disable-sync',
     '--metrics-recording-only',
     '--no-default-browser-check',
@@ -54,23 +52,23 @@ export async function launchBrowser(
     },
   );
 
-  // Find extension service worker — check existing targets first,
-  // then wait for new ones if not found yet
-  const swFilter = (t: any) =>
-    t.type() === 'service_worker' && t.url().startsWith('chrome-extension://');
+  // Find extension background target — service_worker (MV3) or background_page (MV2)
+  const bgFilter = (t: any) =>
+    (t.type() === 'service_worker' || t.type() === 'background_page') &&
+    t.url().startsWith('chrome-extension://');
 
-  // Give Chrome a moment to register targets after launch
-  await new Promise((r) => setTimeout(r, 2000));
+  // Give Chrome time to register extension targets (5s needed with stealth args)
+  await new Promise((r) => setTimeout(r, 5000));
 
-  let swTarget = browser.targets().find(swFilter);
+  let swTarget = browser.targets().find(bgFilter);
   if (!swTarget) {
-    log.debug('SW not in existing targets, waiting...');
-    swTarget = await browser.waitForTarget(swFilter, { timeout: 30_000 });
+    log.debug('Background target not in existing targets, waiting...');
+    swTarget = await browser.waitForTarget(bgFilter, { timeout: 30_000 });
   } else {
-    log.debug('SW found in existing targets');
+    log.debug({ type: swTarget.type() }, 'Background target found in existing targets');
   }
 
-  // Extract extension ID from the service worker URL
+  // Extract extension ID from the background target URL
   const extensionId = new URL(swTarget.url()).hostname;
   log.info({ extensionId }, 'Extension loaded');
 
@@ -85,12 +83,7 @@ export async function launchBrowser(
     }
   });
 
-  // Create browser-level CDP session for auto-attach
-  const browserSession = await (browser as any)
-    .target()
-    .createCDPSession() as CDPSession;
-
-  return { browser, extensionId, browserSession };
+  return { browser, extensionId };
 }
 
 /**
