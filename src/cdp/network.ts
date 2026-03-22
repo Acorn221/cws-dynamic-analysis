@@ -1,5 +1,6 @@
 import type { CDPSession } from 'puppeteer';
 import type { NetworkRequest, TargetType, SourceLabel } from '../types/events.js';
+import type { RequestWillBeSentParams, ResponseReceivedParams, LoadingFinishedParams, LoadingFailedParams, WebSocketCreatedParams, CallFrame } from '../types/cdp.js';
 import type { PhaseTracker } from '../scenario/phase-tracker.js';
 import { logger } from '../logger.js';
 
@@ -74,28 +75,29 @@ export async function enableNetworkMonitoring(
     maxResourceBufferSize: 5 * 1024 * 1024,
   });
 
-  session.on('Network.requestWillBeSent', (params: any) => {
-    const initiatorUrl: string | undefined = params.initiator?.url;
-    const stackTrace: string | undefined = params.initiator?.stack?.callFrames
+  session.on('Network.requestWillBeSent', (params) => {
+    const p = params as unknown as RequestWillBeSentParams;
+    const initiatorUrl = p.initiator?.url;
+    const stackTrace = p.initiator?.stack?.callFrames
       ?.slice(0, 3)
-      .map((f: any) => `${f.functionName}@${f.url}:${f.lineNumber}`)
+      .map((f: CallFrame) => `${f.functionName}@${f.url}:${f.lineNumber}`)
       .join(' → ');
 
     const req: Partial<NetworkRequest> = {
-      id: params.requestId,
-      timestamp: new Date(params.wallTime * 1000).toISOString(),
-      url: params.request.url,
-      method: params.request.method,
-      headers: params.request.headers ?? {},
-      bodySize: params.request.postDataLength,
-      bodyPreview: params.request.postData ?? undefined,
+      id: p.requestId,
+      timestamp: new Date(p.wallTime * 1000).toISOString(),
+      url: p.request.url,
+      method: p.request.method,
+      headers: p.request.headers ?? {},
+      bodySize: p.request.postDataLength,
+      bodyPreview: p.request.postData ?? undefined,
       targetType,
-      source: detectSource(targetType, initiatorUrl, stackTrace, pageUrl ?? params.documentURL),
+      source: detectSource(targetType, initiatorUrl, stackTrace, pageUrl ?? p.documentURL),
       phase: phaseTracker?.current,
       initiator: {
-        type: params.initiator?.type ?? 'other',
+        type: (p.initiator?.type as any) ?? 'other',
         url: initiatorUrl,
-        lineNumber: params.initiator?.lineNumber,
+        lineNumber: p.initiator?.lineNumber,
         stackTrace,
       },
       flagged: false,
@@ -104,43 +106,47 @@ export async function enableNetworkMonitoring(
       relatedEvents: [],
     };
 
-    pendingRequests.set(params.requestId, req);
+    pendingRequests.set(p.requestId, req);
   });
 
-  session.on('Network.responseReceived', (params: any) => {
-    const req = pendingRequests.get(params.requestId);
+  session.on('Network.responseReceived', (params) => {
+    const p = params as unknown as ResponseReceivedParams;
+    const req = pendingRequests.get(p.requestId);
     if (!req) return;
-    req.status = params.response.status;
+    req.status = p.response.status;
   });
 
-  session.on('Network.loadingFinished', async (params: any) => {
-    const req = pendingRequests.get(params.requestId);
+  session.on('Network.loadingFinished', async (params) => {
+    const p = params as unknown as LoadingFinishedParams;
+    const req = pendingRequests.get(p.requestId);
     if (!req) return;
-    pendingRequests.delete(params.requestId);
+    pendingRequests.delete(p.requestId);
 
     // Capture full response body now that loading is complete
-    await captureResponseBody(session, params.requestId, req).catch(() => {});
+    await captureResponseBody(session, p.requestId, req).catch(() => {});
 
     onEvent(req as NetworkRequest);
   });
 
-  session.on('Network.loadingFailed', (params: any) => {
-    const req = pendingRequests.get(params.requestId);
+  session.on('Network.loadingFailed', (params) => {
+    const p = params as unknown as LoadingFailedParams;
+    const req = pendingRequests.get(p.requestId);
     if (!req) return;
-    pendingRequests.delete(params.requestId);
+    pendingRequests.delete(p.requestId);
     req.status = 0;
-    req.flagReasons = [...(req.flagReasons ?? []), `failed: ${params.errorText}`];
+    req.flagReasons = [...(req.flagReasons ?? []), `failed: ${p.errorText}`];
 
     onEvent(req as NetworkRequest);
   });
 
   // WebSocket monitoring
-  session.on('Network.webSocketCreated', (params: any) => {
-    log.info({ url: params.url, targetType }, 'WebSocket created');
+  session.on('Network.webSocketCreated', (params) => {
+    const p = params as unknown as WebSocketCreatedParams;
+    log.info({ url: p.url, targetType }, 'WebSocket created');
     onEvent({
-      id: params.requestId,
+      id: p.requestId,
       timestamp: new Date().toISOString(),
-      url: params.url,
+      url: p.url,
       method: 'WS_CONNECT',
       targetType,
       source: detectSource(targetType, undefined, undefined, pageUrl),

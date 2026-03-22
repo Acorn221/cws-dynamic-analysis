@@ -8,37 +8,18 @@
 import Database from 'better-sqlite3';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { RequestRow, CanaryRow, ApiCountRow, ConsoleRow } from './types/cdp.js';
 import { logger } from './logger.js';
 
 const log = logger.child({ component: 'evidence' });
 
 interface EvidenceConfig {
   outputDir: string;
-  claims?: string[];         // Static analysis claims to prove
-  endpoints?: string[];      // Domains to focus on
-  flags?: string[];          // Flag categories
+  claims?: string[];
+  endpoints?: string[];
+  flags?: string[];
   extensionName?: string;
   extensionId?: string;
-}
-
-// Column names match SQLite schema (snake_case)
-interface EvidenceRequest {
-  id: string;
-  timestamp: string;
-  method: string;
-  url: string;
-  domain: string;
-  source: string;
-  phase: string;
-  status: number;
-  body_size: number;
-  body: string;
-  response_body: string;
-  flagged: number;
-  flag_reasons: string;
-  canary_count: number;
-  initiator_url: string;
-  initiator_stack: string;
 }
 
 export async function generateEvidence(config: EvidenceConfig): Promise<{
@@ -60,34 +41,34 @@ export async function generateEvidence(config: EvidenceConfig): Promise<{
     SELECT * FROM requests
     WHERE source IN ('bgsw', 'cs', 'ext-page')
     ORDER BY timestamp
-  `).all() as EvidenceRequest[];
+  `).all() as RequestRow[];
 
   // 2. Collect flagged requests
   const flaggedRequests = db.prepare(`
     SELECT * FROM requests WHERE flagged = 1 ORDER BY timestamp
-  `).all() as EvidenceRequest[];
+  `).all() as RequestRow[];
 
   // 3. Collect canary detections
-  const canaryHits = db.prepare(`SELECT * FROM canary`).all() as any[];
+  const canaryHits = db.prepare(`SELECT * FROM canary`).all() as CanaryRow[];
 
   // 4. Collect chrome API usage
   const apiUsage = db.prepare(`
     SELECT api, count(*) as count, min(timestamp) as first_seen, max(timestamp) as last_seen
     FROM hooks WHERE source = 'bgsw' OR caller = 'service_worker'
     GROUP BY api ORDER BY count DESC
-  `).all() as any[];
+  `).all() as ApiCountRow[];
 
   // 5. Collect extension console messages
   const extConsole = db.prepare(`
     SELECT * FROM console WHERE source = 'extension' ORDER BY timestamp
-  `).all() as any[];
+  `).all() as ConsoleRow[];
 
   // 6. Collect requests to specific endpoints (from static analysis)
-  const endpointRequests: Record<string, EvidenceRequest[]> = {};
+  const endpointRequests: Record<string, RequestRow[]> = {};
   for (const endpoint of config.endpoints ?? []) {
     const rows = db.prepare(`
       SELECT * FROM requests WHERE domain LIKE ? ORDER BY timestamp
-    `).all(`%${endpoint}%`) as EvidenceRequest[];
+    `).all(`%${endpoint}%`) as RequestRow[];
     if (rows.length > 0) endpointRequests[endpoint] = rows;
   }
 
@@ -117,8 +98,8 @@ export async function generateEvidence(config: EvidenceConfig): Promise<{
 }
 
 function buildHar(
-  extRequests: EvidenceRequest[],
-  flaggedRequests: EvidenceRequest[],
+  extRequests: RequestRow[],
+  flaggedRequests: RequestRow[],
   summary: any,
 ) {
   const allEvidence = [...extRequests, ...flaggedRequests];
@@ -187,13 +168,13 @@ function buildHar(
 function buildEvidenceReport(
   config: EvidenceConfig,
   data: {
-    extRequests: EvidenceRequest[];
-    flaggedRequests: EvidenceRequest[];
-    canaryHits: any[];
-    apiUsage: any[];
-    extConsole: any[];
-    endpointRequests: Record<string, EvidenceRequest[]>;
-    summary: any;
+    extRequests: RequestRow[];
+    flaggedRequests: RequestRow[];
+    canaryHits: CanaryRow[];
+    apiUsage: ApiCountRow[];
+    extConsole: ConsoleRow[];
+    endpointRequests: Record<string, RequestRow[]>;
+    summary: Record<string, any>;
   },
 ) {
   const findings: any[] = [];
@@ -291,7 +272,7 @@ function buildEvidenceReport(
   };
 }
 
-function summarizeRequest(r: EvidenceRequest) {
+function summarizeRequest(r: RequestRow) {
   return {
     id: r.id,
     timestamp: r.timestamp,
