@@ -650,4 +650,20 @@ addInteractShortcut('click', 'action');   // da click /tmp/s '{"action":"click",
 addInteractShortcut('snap', 'snapshot');  // da snap /tmp/s
 addInteractShortcut('close', 'stop');     // da close /tmp/s
 
+// --- da serve — web dashboard with live browser viewer ---
+program
+  .command('serve')
+  .description('Start the web dashboard for monitoring DA runs with live browser viewing')
+  .option('-p, --port <port>', 'HTTP server port', '3300')
+  .option('--host <host>', 'Bind address (0.0.0.0 for remote access)', '0.0.0.0')
+  .option('-d, --output-dir <dir>', 'Base output directory to watch for runs', './output')
+  .action(async (opts: any) => {
+    const { startDashboardServer } = await import('./serve/server.js');
+    await startDashboardServer({
+      port: parseInt(opts.port, 10),
+      host: opts.host,
+      outputDir: resolve(opts.outputDir),
+    });
+  });
+
 program.parse();

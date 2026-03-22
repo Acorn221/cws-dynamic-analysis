@@ -27,6 +27,7 @@ import { runScenario } from './scenario/engine.js';
 import type { RunConfig } from './types/config.js';
 import type { ApiCall, NetworkRequest, ConsoleEntry } from './types/events.js';
 import type { RunSummary } from './types/findings.js';
+import { writeRunState } from './serve/run-state.js';
 import { logger } from './logger.js';
 
 const log = logger.child({ component: 'analyzer' });
@@ -107,6 +108,18 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       }
       log.info({ extensionId: config.extensionId }, 'Browser launched, extension loaded');
     }
+
+    // Write run state for the dashboard to discover
+    await writeRunState(config.outputDir, {
+      runId: config.runId,
+      extensionId: config.extensionId,
+      wsEndpoint: browser.wsEndpoint(),
+      outputDir: config.outputDir,
+      phase: 'init',
+      status: 'running',
+      startedAt,
+      pid: process.pid,
+    }).catch(() => {});
 
     // Deterministic JSONL filename: events.jsonl (no UUID)
     jsonlPath = join(config.outputDir, 'events.jsonl');
@@ -293,6 +306,20 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
 
     log.info({ targetType }, 'Background target instrumented (resumed)');
 
+    // Periodic state updates for the dashboard (every 5s)
+    const stateInterval = setInterval(() => {
+      const stats = buffer.getStats();
+      writeRunState(config.outputDir, {
+        phase: phaseTracker.current,
+        stats: {
+          totalRequests: stats.totalNetworkRequests,
+          extensionRequests: stats.extensionRequests,
+          flaggedRequests: stats.flaggedRequests,
+          canaryDetections: stats.canaryDetections,
+        },
+      }).catch(() => {});
+    }, 5000);
+
     // 3. Get main page and instrument it
     const pages = await browser.pages();
     const page = pages[0] ?? await browser.newPage();
@@ -385,7 +412,10 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       rawLogPath: jsonlPath,
     };
 
+    clearInterval(stateInterval);
+
     // 6. Write results
+    await writeRunState(config.outputDir, { phase: 'done', status: 'completed' }).catch(() => {});
     await writeFile(join(config.outputDir, 'summary.json'), JSON.stringify(summary, null, 2));
     await writeFile(join(config.outputDir, 'llm_summary.md'), llmSummary);
     await writeFile(join(config.outputDir, 'stats.json'), JSON.stringify(stats, null, 2));
@@ -414,6 +444,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     return { summary, llmSummary, outputDir: config.outputDir };
   } catch (err) {
     log.error({ err }, 'Analysis failed');
+    await writeRunState(config.outputDir, { status: 'failed', phase: 'error' }).catch(() => {});
     await jsonl?.close();
 
     const finishedAt = new Date().toISOString();
