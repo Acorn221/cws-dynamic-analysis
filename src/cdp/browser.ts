@@ -49,7 +49,7 @@ export async function launchBrowser(
       headless: config.headless,
       executablePath: config.executablePath,
       args,
-      defaultViewport: { width: 1920, height: 1080 },
+      defaultViewport: { width: 1512, height: 982, deviceScaleFactor: 2 }, // MacBook Pro 14" Retina
       protocolTimeout: 30_000,
     },
   );
