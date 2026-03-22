@@ -127,6 +127,37 @@ program
   });
 
 // ============================================================
+// EVIDENCE command
+// ============================================================
+program
+  .command('evidence')
+  .description(
+    'Generate undeniable proof artifacts from analysis results.\n\n' +
+    'Outputs:\n' +
+    '  evidence.har   — HTTP Archive (open in Chrome DevTools Network tab)\n' +
+    '  evidence.json  — Structured findings with full request bodies\n\n' +
+    'Examples:\n' +
+    '  da evidence /tmp/r\n' +
+    '  da evidence /tmp/r --endpoints urban-vpn.com,geosurf.io\n' +
+    '  da evidence /tmp/r --name "Urban VPN" --id eppiocemhmnlbhjplcgkofciiegomcon',
+  )
+  .argument('<output-dir>', 'Analysis output directory with events.db')
+  .option('--endpoints <domains>', 'Comma-separated domains from static analysis to focus on')
+  .option('--name <name>', 'Extension name for the report')
+  .option('--id <id>', 'Extension CWS ID for the report')
+  .action(async (outputDir: string, opts: any) => {
+    const { generateEvidence } = await import('./evidence.js');
+    const result = await generateEvidence({
+      outputDir: resolve(outputDir),
+      endpoints: opts.endpoints?.split(',').map((s: string) => s.trim()),
+      extensionName: opts.name,
+      extensionId: opts.id,
+    });
+    console.log(`${result.findings} findings → ${result.evidencePath}`);
+    console.log(`HAR → ${result.harPath}`);
+  });
+
+// ============================================================
 // QUERY command group
 // ============================================================
 const query = program
