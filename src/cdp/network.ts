@@ -88,7 +88,7 @@ export async function enableNetworkMonitoring(
       method: params.request.method,
       headers: params.request.headers ?? {},
       bodySize: params.request.postDataLength,
-      bodyPreview: params.request.postData?.slice(0, 2000),
+      bodyPreview: params.request.postData ?? undefined,
       targetType,
       source: detectSource(targetType, initiatorUrl, stackTrace, pageUrl ?? params.documentURL),
       phase: phaseTracker?.current,
@@ -110,19 +110,16 @@ export async function enableNetworkMonitoring(
   session.on('Network.responseReceived', (params: any) => {
     const req = pendingRequests.get(params.requestId);
     if (!req) return;
-
     req.status = params.response.status;
-
-    // Try to capture response body for flagged/suspicious requests
-    captureResponseBody(session, params.requestId, req).catch(() => {
-      // Response body may not be available — that's fine
-    });
   });
 
-  session.on('Network.loadingFinished', (params: any) => {
+  session.on('Network.loadingFinished', async (params: any) => {
     const req = pendingRequests.get(params.requestId);
     if (!req) return;
     pendingRequests.delete(params.requestId);
+
+    // Capture full response body now that loading is complete
+    await captureResponseBody(session, params.requestId, req).catch(() => {});
 
     onEvent(req as NetworkRequest);
   });
@@ -168,7 +165,7 @@ async function captureResponseBody(
   try {
     const { body } = await session.send('Network.getResponseBody', { requestId });
     if (typeof body === 'string') {
-      req.responseBodyPreview = body.slice(0, 2000);
+      req.responseBodyPreview = body;
     }
   } catch {
     // Body not available (e.g., streaming, too large)

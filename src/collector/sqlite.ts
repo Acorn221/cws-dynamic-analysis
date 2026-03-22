@@ -29,8 +29,8 @@ export class SqliteStore {
         source TEXT,
         phase TEXT,
         body_size INTEGER,
-        body_preview TEXT,
-        response_preview TEXT,
+        body TEXT,
+        response_body TEXT,
         flagged INTEGER DEFAULT 0,
         flag_reasons TEXT,
         canary_count INTEGER DEFAULT 0,
@@ -81,7 +81,7 @@ export class SqliteStore {
 
     this.insertReq = this.db.prepare(`
       INSERT OR REPLACE INTO requests (id, timestamp, method, url, domain, status, source, phase,
-        body_size, body_preview, response_preview, flagged, flag_reasons, canary_count,
+        body_size, body, response_body, flagged, flag_reasons, canary_count,
         initiator_url, initiator_stack)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
@@ -133,7 +133,7 @@ export class SqliteStore {
   addHook(call: ApiCall): void {
     this.insertHook.run(
       call.id, call.timestamp, call.api,
-      JSON.stringify(call.args).slice(0, 2000),
+      JSON.stringify(call.args),
       call.returnValueSummary ?? null,
       call.callerContext, call.source ?? null, call.phase ?? null,
     );

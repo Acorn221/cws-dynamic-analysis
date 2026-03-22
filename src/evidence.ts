@@ -32,8 +32,8 @@ interface EvidenceRequest {
   phase: string;
   status: number;
   body_size: number;
-  body_preview: string;
-  response_preview: string;
+  body: string;
+  response_body: string;
   flagged: number;
   flag_reasons: string;
   canary_count: number;
@@ -147,10 +147,10 @@ function buildHar(
           httpVersion: 'HTTP/1.1',
           headers: [],
           queryString: parseQueryString(r.url),
-          postData: r.body_preview
+          postData: r.body
             ? {
                 mimeType: 'application/octet-stream',
-                text: r.body_preview,
+                text: r.body,
               }
             : undefined,
           headersSize: -1,
@@ -165,7 +165,7 @@ function buildHar(
           content: {
             size: -1,
             mimeType: 'text/plain',
-            text: r.response_preview ?? '',
+            text: r.response_body ?? '',
           },
           redirectURL: '',
           headersSize: -1,
@@ -302,8 +302,8 @@ function summarizeRequest(r: EvidenceRequest) {
     domain: r.domain,
     status: r.status,
     bodySize: r.body_size,
-    body: r.body_preview ?? null,
-    response: r.response_preview ?? null,
+    body: r.body ?? null,
+    response: r.response_body ?? null,
     flagged: r.flagged === 1,
     flagReasons: r.flag_reasons || null,
     canaryCount: r.canary_count,

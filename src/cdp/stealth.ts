@@ -1,3 +1,4 @@
+// @ts-nocheck — evaluateOnNewDocument runs in browser context (DOM types)
 /**
  * Stealth configuration — emulates a MacBook Pro 14" M1 Pro running
  * Chrome 131 on macOS Sonoma 14.4. Every fingerprint value is sourced
@@ -24,6 +25,7 @@ export const STEALTH_ARGS = [
  * Covers every fingerprint vector that bot detection frameworks check.
  */
 export async function applyPageStealth(page: Page): Promise<void> {
+  // @ts-ignore — this runs in browser context, not Node
   await page.evaluateOnNewDocument(() => {
     // ---- navigator core properties ----
 
