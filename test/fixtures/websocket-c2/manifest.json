@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Test: WebSocket C2",
+  "version": "1.0.0",
+  "description": "Test fixture — SW connects to WebSocket C2 server",
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"]
+}
