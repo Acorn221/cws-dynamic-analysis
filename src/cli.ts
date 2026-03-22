@@ -68,6 +68,8 @@ program
   .option('--no-stealth', 'Disable puppeteer-extra-plugin-stealth')
   .option('--no-instrument', 'Skip source rewriting (use runtime injection only)')
   .option('--session <dir>', 'Reuse browser from an interact session (same profile/state)')
+  .option('--override <json>', 'JSON array of overrides: [{"urlPattern":"*config*","action":"mock","body":"{}"}]')
+  .option('--override-file <path>', 'Path to JSON file with override array')
   .option('--quick', 'Quick mode: 30s, browse+login only, for testing tool changes', false)
   .option('--duration <seconds>', 'Max scenario duration in seconds', '120')
   .option('--chrome-path <path>', 'Chrome binary path (auto-detected if omitted)')
@@ -99,6 +101,12 @@ program
     config.instrument = opts.instrument !== false;
     config.sessionDir = opts.session ? resolve(opts.session) : undefined;
     config.browser.executablePath = opts.chromePath;
+    // Parse overrides from --override (inline JSON) or --override-file (path)
+    if (opts.override) {
+      config.overrides = JSON.parse(opts.override);
+    } else if (opts.overrideFile) {
+      config.overrides = JSON.parse(await readFile(resolve(opts.overrideFile), 'utf-8'));
+    }
     if (opts.quick) {
       config.scenario.maxDuration = 30;
       config.scenario.phases = ['browse', 'login'] as PhaseId[];

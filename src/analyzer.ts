@@ -169,6 +169,12 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       awaitPromise: false,
     });
 
+    // Enable overrides on SW (mock/block specific URLs)
+    if (config.overrides?.length) {
+      const { enableOverrides } = await import('./cdp/overrides.js');
+      await enableOverrides(swCdp, config.overrides);
+    }
+
     // Enable network monitoring on service worker (with phase tracker)
     await enableNetworkMonitoring(swCdp, 'service_worker', (req: NetworkRequest) => {
       req.phase = phaseTracker.current;
@@ -233,7 +239,7 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
     const pages = await browser.pages();
     const page = pages[0] ?? await browser.newPage();
 
-    await instrumentPage(page, buffer, sink, phaseTracker);
+    await instrumentPage(page, buffer, sink, phaseTracker, config.overrides);
 
     // Instrument any new pages that open during the scenario
     browser.on('targetcreated', async (target: Target) => {
@@ -241,7 +247,7 @@ swCdp.on('Runtime.consoleAPICalled', (event: any) => {
         try {
           const newPage = await target.page();
           if (newPage) {
-            await instrumentPage(newPage, buffer, sink, phaseTracker);
+            await instrumentPage(newPage, buffer, sink, phaseTracker, config.overrides);
           }
         } catch (err) {
           log.debug({ err }, 'Failed to instrument new page target');
@@ -389,9 +395,15 @@ async function instrumentPage(
   buffer: EventBuffer,
   sinkObj: { request: (r: NetworkRequest) => void; hook: (c: ApiCall) => void; console: (e: ConsoleEntry) => void },
   phaseTracker: PhaseTracker,
+  overrides?: RunConfig['overrides'],
 ): Promise<void> {
   try {
     const cdp = await page.createCDPSession();
+
+    if (overrides?.length) {
+      const { enableOverrides } = await import('./cdp/overrides.js');
+      await enableOverrides(cdp, overrides);
+    }
 
     const currentPageUrl = page.url();
     await enableNetworkMonitoring(cdp, 'page', (req: NetworkRequest) => {

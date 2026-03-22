@@ -25,6 +25,14 @@ export interface RunConfig {
   instrument: boolean;
   /** Path to interact session dir — reuse its browser instead of launching new one */
   sessionDir?: string;
+  /** CDP Fetch overrides — mock or block specific URLs */
+  overrides?: Array<{
+    urlPattern: string;
+    action: 'mock' | 'block';
+    status?: number;
+    body?: string;
+    contentType?: string;
+  }>;
 }
 
 export interface BrowserConfig {
