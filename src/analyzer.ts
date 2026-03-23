@@ -353,13 +353,11 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     // 4. Extension interaction phase — LLM navigates popup/options/onboarding
     if (config.scenario.phases.includes('ext-interact')) {
       phaseTracker.current = 'ext-interact';
-      log.info('Starting LLM-driven extension interaction...');
+      log.info('Opening extension pages for activation...');
       try {
         const { interactWithExtension } = await import('./scenario/ext-interact.js');
         const interactResult = await interactWithExtension(browser, {
           extensionId: config.extensionId,
-          model: config.analysis.triageModel,
-          maxTurns: 15,
         });
         log.info({
           turns: interactResult.turns,
