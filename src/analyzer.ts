@@ -2,7 +2,7 @@
  * Core analysis pipeline — orchestrates the full e2e flow:
  * Launch browser → instrument → run scenarios → collect → detect → summarize → output
  */
-import { mkdir, writeFile, rm, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, rm, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Browser, Page, CDPSession, Target } from 'puppeteer';
@@ -350,44 +350,77 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       }
     });
 
-    // 4. Extension interaction phase — LLM navigates popup/options/onboarding
-    if (config.scenario.phases.includes('ext-interact')) {
-      phaseTracker.current = 'ext-interact';
-      log.info('Opening extension pages for activation...');
-      try {
-        const { interactWithExtension } = await import('./scenario/ext-interact.js');
-        const interactResult = await interactWithExtension(browser, {
-          extensionId: config.extensionId,
-        });
-        log.info({
-          turns: interactResult.turns,
-          actions: interactResult.actions.length,
-        }, 'Extension interaction complete');
-      } catch (err: any) {
-        log.warn({ err: err.message }, 'Extension interaction failed (non-fatal)');
+    if (config.agentDriven) {
+      // ── Agent-driven mode ──
+      // Instrumentation is active. Write session.json so the subagent can
+      // drive the browser via `da interact` commands, then wait for finish signal.
+      phaseTracker.current = 'agent';
+      const sessionInfo = {
+        wsEndpoint: browser.wsEndpoint(),
+        extensionId: config.extensionId,
+        canaryPort,
+        canary: config.canary,
+        outputDir: config.outputDir,
+        pid: process.pid,
+      };
+      await writeFile(join(config.outputDir, 'session.json'), JSON.stringify(sessionInfo, null, 2));
+      log.info('Agent-driven mode — waiting for subagent to drive browser');
+      console.log(`READY dir=${config.outputDir} extensionId=${config.extensionId}`);
+
+      // Poll for .finish signal file
+      const deadline = Date.now() + config.scenario.maxDuration * 1000;
+      const signalPath = join(config.outputDir, '.finish');
+      while (Date.now() < deadline) {
+        try {
+          await stat(signalPath);
+          await rm(signalPath, { force: true });
+          break;
+        } catch {
+          await new Promise(r => setTimeout(r, 500));
+        }
       }
-    }
+      log.info('Agent-driven phase complete');
+    } else {
+      // ── Automated mode ──
+      // 4. Extension interaction phase — open popup/options for activation
+      if (config.scenario.phases.includes('ext-interact')) {
+        phaseTracker.current = 'ext-interact';
+        log.info('Opening extension pages for activation...');
+        try {
+          const { interactWithExtension } = await import('./scenario/ext-interact.js');
+          const interactResult = await interactWithExtension(browser, {
+            extensionId: config.extensionId,
+          });
+          log.info({
+            turns: interactResult.turns,
+            actions: interactResult.actions.length,
+          }, 'Extension interaction complete');
+        } catch (err: any) {
+          log.warn({ err: err.message }, 'Extension interaction failed (non-fatal)');
+        }
+      }
 
-    // 5. Run the browsing scenario (engine updates phaseTracker.current)
-    //
-    // After ext-interact, the original page may be dead (extension closed/navigated it,
-    // or page.close() in ext-interact hit the wrong page). Get a fresh page if needed.
-    let scenarioPage: Page;
-    try {
-      // Check if original page is still alive
-      await page.evaluate(() => true);
-      scenarioPage = page;
-    } catch {
-      log.warn('Original page died during ext-interact, creating new page');
-      const freshPages = await browser.pages();
-      const livePage = freshPages.find((p) => !p.isClosed());
-      scenarioPage = livePage ?? await browser.newPage();
-      await instrumentPage(scenarioPage, buffer, sink, phaseTracker, config.overrides);
-    }
+      // 5. Run the browsing scenario (engine updates phaseTracker.current)
+      //
+      // After ext-interact, the original page may be dead (extension closed/navigated it,
+      // or page.close() in ext-interact hit the wrong page). Get a fresh page if needed.
+      let scenarioPage: Page;
+      try {
+        // Check if original page is still alive
+        await page.evaluate(() => true);
+        scenarioPage = page;
+      } catch {
+        log.warn('Original page died during ext-interact, creating new page');
+        const freshPages = await browser.pages();
+        const livePage = freshPages.find((p) => !p.isClosed());
+        scenarioPage = livePage ?? await browser.newPage();
+        await instrumentPage(scenarioPage, buffer, sink, phaseTracker, config.overrides);
+      }
 
-    const browsingPhases = config.scenario.phases.filter(p => p !== 'ext-interact');
-    log.info('Starting browsing scenario...');
-    await runScenario(scenarioPage, { ...config.scenario, phases: browsingPhases }, config.canary, canaryPort, phaseTracker, browser);
+      const browsingPhases = config.scenario.phases.filter(p => p !== 'ext-interact');
+      log.info('Starting browsing scenario...');
+      await runScenario(scenarioPage, { ...config.scenario, phases: browsingPhases }, config.canary, canaryPort, phaseTracker, browser);
+    }
     phaseTracker.current = 'post';
     log.info('Scenario complete');
 

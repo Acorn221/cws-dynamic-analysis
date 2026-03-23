@@ -25,6 +25,8 @@ export interface RunConfig {
   instrument: boolean;
   /** Path to interact session dir — reuse its browser instead of launching new one */
   sessionDir?: string;
+  /** Agent-driven mode: pause after instrumentation, let subagent drive browser */
+  agentDriven?: boolean;
   /** CDP Fetch overrides — mock or block specific URLs */
   overrides?: Array<{
     urlPattern: string;
@@ -66,6 +68,7 @@ export interface ScenarioConfig {
 export type PhaseId =
   | 'install'
   | 'ext-interact'
+  | 'agent'
   | 'browse'
   | 'login'
   | 'banking'

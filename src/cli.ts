@@ -14,8 +14,8 @@
  *   9. Manifest info:   node dist/cli.js query manifest ./output/ext-id
  */
 import { Command } from 'commander';
-import { resolve } from 'node:path';
-import { stat, readFile } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
+import { stat, readFile, writeFile } from 'node:fs/promises';
 import { logger } from './logger.js';
 import { defaultConfig, type PhaseId } from './types/config.js';
 import { analyze } from './analyzer.js';
@@ -70,6 +70,7 @@ program
   .option('--session <dir>', 'Reuse browser from an interact session (same profile/state)')
   .option('--override <json>', 'JSON array of overrides: [{"urlPattern":"*config*","action":"mock","body":"{}"}]')
   .option('--override-file <path>', 'Path to JSON file with override array')
+  .option('--agent-driven', 'Pause after instrumentation, let subagent drive browser via da interact', false)
   .option('--quick', 'Quick mode: 30s, browse+login only, for testing tool changes', false)
   .option('--duration <seconds>', 'Max scenario duration in seconds', '120')
   .option('--chrome-path <path>', 'Chrome binary path (auto-detected if omitted)')
@@ -115,6 +116,7 @@ program
       config.scenario.phases = opts.phases.split(',').map((s: string) => s.trim()) as PhaseId[];
     }
     if (opts.interactModel) config.analysis.triageModel = opts.interactModel;
+    if (opts.agentDriven) config.agentDriven = true;
 
     logger.info({
       extensionPath: absPath,
@@ -444,8 +446,9 @@ interact
   .command('snapshot').alias('snap')
   .description('Re-print the current DOM snapshot of the extension page.')
   .argument('<session-dir>', 'Session directory from interact start')
-  .action(async (sessionDir: string) => {
-    const snapshot = await interactSnapshot(resolve(sessionDir));
+  .option('--page', 'Snapshot the active web page instead of extension page')
+  .action(async (sessionDir: string, opts: any) => {
+    const snapshot = await interactSnapshot(resolve(sessionDir), opts.page ? 'page' : undefined);
     console.log(snapshot);
   });
 
@@ -649,6 +652,17 @@ addInteractShortcut('open', 'start');     // da open /path/ext -o /tmp/s --headl
 addInteractShortcut('click', 'action');   // da click /tmp/s '{"action":"click",...}'
 addInteractShortcut('snap', 'snapshot');  // da snap /tmp/s
 addInteractShortcut('close', 'stop');     // da close /tmp/s
+
+// --- da finish — signal completion to an agent-driven run ---
+program
+  .command('finish')
+  .description('Signal completion to an agent-driven run, triggering post-processing and report generation.')
+  .argument('<output-dir>', 'Output directory of the running agent-driven analysis')
+  .action(async (outputDir: string) => {
+    const signalPath = join(resolve(outputDir), '.finish');
+    await writeFile(signalPath, new Date().toISOString());
+    console.log('DONE finish signal sent');
+  });
 
 // --- da serve — web dashboard with live browser viewer ---
 program

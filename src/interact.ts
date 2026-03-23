@@ -10,15 +10,11 @@
  *
  * The browser persists between calls via wsEndpoint saved to <dir>/session.json.
  */
-import puppeteerExtra from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import puppeteer, { type Browser, type Page } from 'puppeteer';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { STEALTH_ARGS, applyPageStealth } from './cdp/stealth.js';
 import { logger } from './logger.js';
-
-puppeteerExtra.use(StealthPlugin());
 
 const log = logger.child({ component: 'interact' });
 
@@ -135,7 +131,7 @@ export async function interactStart(
  */
 export async function interactAction(
   outputDir: string,
-  action: { action: string; selector?: string; text?: string; value?: string; url?: string; direction?: string },
+  action: { action: string; selector?: string; text?: string; value?: string; url?: string; direction?: string; target?: string },
 ): Promise<string> {
   // Hard 15s timeout on the entire action — if anything hangs, bail
   const TIMEOUT = 15_000;
@@ -147,16 +143,33 @@ export async function interactAction(
   ]);
 }
 
+async function findPage(browser: Browser, session: SessionState, target?: string): Promise<Page | undefined> {
+  const pages = await browser.pages();
+  if (target === 'page') {
+    // Find a regular (non-extension) web page
+    const webPage = pages.find((p) =>
+      !p.isClosed() &&
+      !p.url().startsWith('chrome-extension://') &&
+      !p.url().startsWith('chrome://') &&
+      p.url() !== 'about:blank',
+    );
+    if (webPage) return webPage;
+    // Create one if none exists
+    return await browser.newPage();
+  }
+  // Default: find extension page
+  return pages.find((p) => p.url().includes(session.extensionId)) ??
+    pages.find((p) => p.url().includes('popup.html') || p.url().includes('options.html'));
+}
+
 async function interactActionInner(
   outputDir: string,
-  action: { action: string; selector?: string; text?: string; value?: string; url?: string; direction?: string },
+  action: { action: string; selector?: string; text?: string; value?: string; url?: string; direction?: string; target?: string },
 ): Promise<string> {
   const session = await loadSession(outputDir);
   const browser = await puppeteer.connect({ browserWSEndpoint: session.wsEndpoint });
 
-  const pages = await browser.pages();
-  const page = pages.find((p) => p.url().includes(session.extensionId)) ??
-    pages.find((p) => p.url().includes('popup.html') || p.url().includes('options.html'));
+  const page = await findPage(browser, session, action.target);
 
   if (!page) {
     browser.disconnect();
@@ -220,23 +233,21 @@ async function interactActionInner(
 /**
  * Get a DOM snapshot of the active extension page.
  */
-export async function interactSnapshot(outputDir: string): Promise<string> {
+export async function interactSnapshot(outputDir: string, target?: string): Promise<string> {
   return Promise.race([
-    interactSnapshotInner(outputDir),
+    interactSnapshotInner(outputDir, target),
     new Promise<string>((_, reject) =>
       setTimeout(() => reject(new Error('interact snapshot timed out after 10s')), 10_000),
     ),
   ]);
 }
 
-async function interactSnapshotInner(outputDir: string): Promise<string> {
+async function interactSnapshotInner(outputDir: string, target?: string): Promise<string> {
   const session = await loadSession(outputDir);
   const browser = await puppeteer.connect({ browserWSEndpoint: session.wsEndpoint });
-  const pages = await browser.pages();
-  const page = pages.find((p) => p.url().includes(session.extensionId)) ??
-    pages.find((p) => p.url().includes('popup.html') || p.url().includes('options.html'));
+  const page = await findPage(browser, session, target);
 
-  if (!page) { browser.disconnect(); return 'ERROR: No extension page found.'; }
+  if (!page) { browser.disconnect(); return 'ERROR: No page found.'; }
   const snap = await getSnapshot(page);
   browser.disconnect();
   return snap;
