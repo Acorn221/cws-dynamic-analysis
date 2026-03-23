@@ -33,6 +33,10 @@ export async function launchBrowser(
     args.push(`--user-data-dir=${config.userDataDir}`);
   }
 
+  // If no display and not headless, warn user to use xvfb-run
+  if (!config.headless && !process.env.DISPLAY) {
+    log.warn('No DISPLAY set and not headless — wrap with xvfb-run for better extension compatibility');
+  }
   log.info({ extensionPath, headless: config.headless }, 'Launching Chrome');
 
   const browser = await puppeteer.launch({
