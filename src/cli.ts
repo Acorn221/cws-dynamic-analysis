@@ -662,6 +662,88 @@ addInteractShortcut('click', 'action');   // da click /tmp/s '{"action":"click",
 addInteractShortcut('snap', 'snapshot');  // da snap /tmp/s
 addInteractShortcut('close', 'stop');     // da close /tmp/s
 
+// --- da overview — quick stats about captured traffic for agent context ---
+program
+  .command('overview')
+  .description('Print a concise overview of captured traffic — domains, methods, sources, top URLs. Gives the agent context before querying individual claims.')
+  .argument('<output-dir>', 'Output directory from a DA run')
+  .action(async (outputDir: string) => {
+    const dbPath = join(resolve(outputDir), 'events.db');
+    try { await stat(dbPath); } catch { console.error(`No events.db in ${outputDir}`); process.exit(1); }
+
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(dbPath, { readonly: true });
+
+    const total = (db.prepare('SELECT count(*) c FROM requests').get() as any).c;
+    const extTotal = (db.prepare("SELECT count(*) c FROM requests WHERE source IN ('bgsw','cs','ext-page')").get() as any).c;
+    const flagged = (db.prepare('SELECT count(*) c FROM requests WHERE flagged=1').get() as any).c;
+
+    console.log(`Requests: ${total} total, ${extTotal} from extension, ${flagged} flagged\n`);
+
+    // Extension requests by domain + method
+    const byDomain = db.prepare(`
+      SELECT domain, method, count(*) c, source
+      FROM requests
+      WHERE source IN ('bgsw','cs','ext-page')
+      AND url NOT LIKE 'chrome-extension%' AND url NOT LIKE 'data:%'
+      AND domain IS NOT NULL
+      GROUP BY domain, method, source
+      ORDER BY c DESC
+    `).all() as any[];
+
+    if (byDomain.length > 0) {
+      console.log('Extension traffic by domain:');
+      for (const r of byDomain) {
+        console.log(`  ${r.c}x ${r.source} ${r.method} ${r.domain}`);
+      }
+      console.log('');
+    }
+
+    // Full URL list for extension requests (deduped, with counts)
+    const byUrl = db.prepare(`
+      SELECT method, url, source, count(*) c,
+        CASE WHEN body IS NOT NULL THEN length(body) ELSE 0 END as body_len,
+        CASE WHEN response_body IS NOT NULL THEN length(response_body) ELSE 0 END as resp_len
+      FROM requests
+      WHERE source IN ('bgsw','cs','ext-page')
+      AND url NOT LIKE 'chrome-extension%' AND url NOT LIKE 'data:%'
+      GROUP BY method, url, source
+      ORDER BY c DESC
+      LIMIT 30
+    `).all() as any[];
+
+    if (byUrl.length > 0) {
+      console.log('Extension URLs (top 30):');
+      for (const r of byUrl) {
+        const bodyInfo = r.body_len > 0 ? ` body=${r.body_len}b` : '';
+        const respInfo = r.resp_len > 0 ? ` resp=${r.resp_len}b` : '';
+        console.log(`  ${r.c}x ${r.source} ${r.method} ${r.url.slice(0, 120)}${bodyInfo}${respInfo}`);
+      }
+      console.log('');
+    }
+
+    // API hooks summary
+    const hooks = db.prepare('SELECT api, source, count(*) c FROM hooks GROUP BY api, source ORDER BY c DESC LIMIT 15').all() as any[];
+    if (hooks.length > 0) {
+      console.log('Chrome API hooks (top 15):');
+      for (const h of hooks) {
+        console.log(`  ${(h as any).c}x ${(h as any).source} ${(h as any).api}`);
+      }
+      console.log('');
+    }
+
+    // Flagged requests
+    const flaggedRows = db.prepare("SELECT source, method, url, flag_reasons FROM requests WHERE flagged=1").all() as any[];
+    if (flaggedRows.length > 0) {
+      console.log('Flagged requests:');
+      for (const r of flaggedRows) {
+        console.log(`  ${r.source} ${r.method} ${r.url.slice(0, 100)} [${r.flag_reasons}]`);
+      }
+    }
+
+    db.close();
+  });
+
 // --- da finish — signal completion to an agent-driven run ---
 program
   .command('finish')
