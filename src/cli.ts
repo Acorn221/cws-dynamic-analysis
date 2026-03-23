@@ -14,8 +14,8 @@
  *   9. Manifest info:   node dist/cli.js query manifest ./output/ext-id
  */
 import { Command } from 'commander';
-import { resolve, join } from 'node:path';
-import { stat, readFile, writeFile } from 'node:fs/promises';
+import { resolve, join, basename } from 'node:path';
+import { stat, readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { logger } from './logger.js';
 import { defaultConfig, type PhaseId } from './types/config.js';
 import { analyze } from './analyzer.js';
@@ -70,6 +70,7 @@ program
   .option('--session <dir>', 'Reuse browser from an interact session (same profile/state)')
   .option('--override <json>', 'JSON array of overrides: [{"urlPattern":"*config*","action":"mock","body":"{}"}]')
   .option('--override-file <path>', 'Path to JSON file with override array')
+  .option('--override-dir <dir>', 'Directory of override JSON files (from da dump-overrides)')
   .option('--agent-driven', 'Pause after instrumentation, let subagent drive browser via da interact', false)
   .option('--quick', 'Quick mode: 30s, browse+login only, for testing tool changes', false)
   .option('--duration <seconds>', 'Max scenario duration in seconds', '120')
@@ -102,11 +103,13 @@ program
     config.instrument = opts.instrument !== false;
     config.sessionDir = opts.session ? resolve(opts.session) : undefined;
     config.browser.executablePath = opts.chromePath;
-    // Parse overrides from --override (inline JSON) or --override-file (path)
+    // Parse overrides from --override (inline JSON), --override-file, or --override-dir
     if (opts.override) {
       config.overrides = JSON.parse(opts.override);
     } else if (opts.overrideFile) {
       config.overrides = JSON.parse(await readFile(resolve(opts.overrideFile), 'utf-8'));
+    } else if (opts.overrideDir) {
+      config.overrides = await loadOverrideDir(resolve(opts.overrideDir));
     }
     if (opts.quick) {
       config.scenario.maxDuration = 30;
@@ -669,6 +672,93 @@ program
     await writeFile(signalPath, new Date().toISOString());
     console.log('DONE finish signal sent');
   });
+
+// --- da dump-overrides — extract captured responses as editable override files ---
+program
+  .command('dump-overrides')
+  .description('Extract captured API responses from a DA run into editable override files.\nThe agent can modify these files, then rerun with --override-dir to test modified behavior.')
+  .argument('<output-dir>', 'Output directory from a previous DA run (must contain events.db)')
+  .option('-o, --output <dir>', 'Where to write override files (default: <output-dir>/overrides)')
+  .option('--source <source>', 'Filter by source: bgsw, cs, ext-page, or all', 'bgsw')
+  .option('--min-body <bytes>', 'Only dump responses with body >= this size', '1')
+  .action(async (outputDir: string, opts: any) => {
+    const absOut = resolve(outputDir);
+    const dbPath = join(absOut, 'events.db');
+    try { await stat(dbPath); } catch { console.error(`ERROR: no events.db in ${absOut}`); process.exit(1); }
+
+    const overrideDir = opts.output ? resolve(opts.output) : join(absOut, 'overrides');
+    await mkdir(overrideDir, { recursive: true });
+
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(dbPath, { readonly: true });
+
+    let sql = `SELECT DISTINCT url, status, response_body, source, method
+               FROM requests
+               WHERE response_body IS NOT NULL
+               AND length(response_body) >= ?
+               AND url NOT LIKE 'chrome-extension%'
+               AND url NOT LIKE 'data:%'`;
+    const params: any[] = [parseInt(opts.minBody, 10)];
+
+    if (opts.source !== 'all') {
+      sql += ` AND source = ?`;
+      params.push(opts.source);
+    }
+    sql += ` ORDER BY rowid`;
+
+    const rows = db.prepare(sql).all(...params) as any[];
+    db.close();
+
+    let count = 0;
+    for (const row of rows) {
+      // Create a filename from the URL
+      let urlObj: URL;
+      try { urlObj = new URL(row.url); } catch { continue; }
+      const safeName = (urlObj.hostname + urlObj.pathname)
+        .replace(/[^a-zA-Z0-9._-]/g, '_')
+        .replace(/_+/g, '_')
+        .slice(0, 120);
+      const filename = `${safeName}.json`;
+
+      // Try to parse body as JSON for pretty-printing
+      let body = row.response_body;
+      try {
+        body = JSON.stringify(JSON.parse(body), null, 2);
+      } catch { /* keep raw */ }
+
+      const override = {
+        _comment: `Override for ${row.method} ${row.url} (source: ${row.source}). Edit body to modify server response.`,
+        urlPattern: `*${urlObj.hostname}${urlObj.pathname}*`,
+        action: 'mock' as const,
+        status: row.status || 200,
+        contentType: 'application/json',
+        body,
+      };
+
+      await writeFile(join(overrideDir, filename), JSON.stringify(override, null, 2));
+      count++;
+    }
+
+    console.log(`${count} override(s) written to ${overrideDir}`);
+    if (count > 0) {
+      console.log(`\nEdit any file, then rerun with:\n  da run <ext> --override-dir ${overrideDir}`);
+    }
+  });
+
+/** Load all override JSON files from a directory */
+async function loadOverrideDir(dir: string): Promise<any[]> {
+  const files = await readdir(dir);
+  const overrides: any[] = [];
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    const content = JSON.parse(await readFile(join(dir, f), 'utf-8'));
+    // Strip the _comment field before passing to the override engine
+    const { _comment, ...override } = content;
+    overrides.push(override);
+  }
+  logger.info({ dir, count: overrides.length }, 'Loaded overrides from directory');
+  return overrides;
+}
 
 // --- da serve — web dashboard with live browser viewer ---
 program
