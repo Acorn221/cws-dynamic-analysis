@@ -59,7 +59,18 @@ export async function interactWithExtension(
   const maxTurns = config.maxTurns ?? MAX_TURNS;
   const actions: string[] = [];
 
-  const client = new Anthropic({ apiKey: config.apiKey });
+  // Validate API key early — skip LLM interaction entirely if unavailable
+  let client: Anthropic | null = null;
+  try {
+    client = new Anthropic({ apiKey: config.apiKey });
+    // Verify the client can resolve auth (constructor doesn't validate)
+    if (!config.apiKey && !process.env.ANTHROPIC_API_KEY) {
+      log.warn('No ANTHROPIC_API_KEY set — skipping LLM-driven interaction');
+      client = null;
+    }
+  } catch {
+    log.warn('Anthropic client init failed — skipping LLM-driven interaction');
+  }
 
   // Open extension pages by using chrome.tabs.create via the SW,
   // because direct page.goto('chrome-extension://...') fails with
@@ -116,7 +127,12 @@ export async function interactWithExtension(
       }
 
       log.info({ url: page.url(), elementCount }, 'Extension page rendered, starting interaction');
-      await runInteractionLoop(page, client, model, maxTurns, actions);
+      if (client) {
+        await runInteractionLoop(page, client, model, maxTurns, actions);
+      } else {
+        log.info('No LLM client — waiting 3s for extension to self-activate');
+        await new Promise((r) => setTimeout(r, 3000));
+      }
       log.info({ url: page.url(), actions: actions.length }, 'Extension page interaction complete');
     } catch (err: any) {
       log.warn({ pagePath, err: err.message }, 'Extension page interaction failed');

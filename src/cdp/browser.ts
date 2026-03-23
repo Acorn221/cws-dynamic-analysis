@@ -1,11 +1,7 @@
 import puppeteer, { type Browser, type CDPSession } from 'puppeteer';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import puppeteerExtra from 'puppeteer-extra';
 import { type BrowserConfig } from '../types/config.js';
 import { STEALTH_ARGS, MAC_UA, applyPageStealth } from './stealth.js';
 import { logger } from '../logger.js';
-
-puppeteerExtra.use(StealthPlugin());
 
 export interface LaunchResult {
   browser: Browser;
@@ -37,20 +33,15 @@ export async function launchBrowser(
     args.push(`--user-data-dir=${config.userDataDir}`);
   }
 
-  const launchFn = config.stealth ? puppeteerExtra.launch : puppeteer.launch;
-
   log.info({ extensionPath, headless: config.headless }, 'Launching Chrome');
 
-  const browser = await launchFn.call(
-    config.stealth ? puppeteerExtra : puppeteer,
-    {
-      headless: config.headless,
-      executablePath: config.executablePath,
-      args,
-      defaultViewport: { width: 1512, height: 982, deviceScaleFactor: 2 }, // MacBook Pro 14" Retina
-      protocolTimeout: 30_000,
-    },
-  );
+  const browser = await puppeteer.launch({
+    headless: config.headless,
+    executablePath: config.executablePath,
+    args,
+    defaultViewport: { width: 1512, height: 982, deviceScaleFactor: 2 }, // MacBook Pro 14" Retina
+    protocolTimeout: 30_000,
+  });
 
   // Find extension background target — service_worker (MV3) or background_page (MV2)
   const bgFilter = (t: any) =>

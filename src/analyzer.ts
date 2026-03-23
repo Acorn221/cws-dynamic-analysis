@@ -67,8 +67,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
   await mkdir(config.outputDir, { recursive: true });
 
   // Start canary page server
-  const canaryPort = 3200;
-  await startCanaryServer(canaryPort);
+  const canaryPort = await startCanaryServer(0);
   log.info({ port: canaryPort }, 'Canary server started');
 
   let browser: Browser | null = null;
@@ -149,9 +148,13 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     let existingSW = browser.targets().find((t) => bgFilter(t as Target)) as Target | undefined;
     const isMV2Background = existingSW?.type() === 'background_page';
 
-    let swCdp: CDPSession;
-    let targetType: 'service_worker' | 'background_page';
+    let swCdp: CDPSession | null = null;
+    let targetType: 'service_worker' | 'background_page' = 'service_worker';
 
+    // The try block below handles SW detection + instrumentation.
+    // If the SW fails to register (crashes on startup, etc), we catch the error
+    // and proceed with page-only analysis. swCdp stays null in that case.
+    try {
     if (isMV2Background) {
       // MV2 background pages persist — direct attach
       targetType = 'background_page';
@@ -211,7 +214,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
         swTarget = browser.targets().find((t) => bgFilter(t as Target)) as Target | undefined;
       }
       swCdp = swTarget ? await swTarget.createCDPSession() : browserCdp;
-      await swCdp.send('Runtime.enable');
+      await swCdp!.send('Runtime.enable');
 
       await browserCdp.send('Target.setAutoAttach' as any, {
         autoAttach: false, waitForDebuggerOnStart: false, flatten: true,
@@ -227,11 +230,13 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       await swCdp.send('Runtime.enable');
     }
 
+    // At this point swCdp is definitely assigned (all branches above set it)
+    const sw = swCdp!;
     log.info({ targetType }, 'Background target found (paused)');
 
     // Inject keep-alive to prevent SW from terminating during analysis.
     // (Injected while still paused — runs when we resume)
-    await swCdp.send('Runtime.evaluate', {
+    await sw.send('Runtime.evaluate', {
       expression: 'setInterval(()=>{},20000)',
       awaitPromise: false,
     });
@@ -239,17 +244,17 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     // Enable overrides on SW (mock/block specific URLs)
     if (config.overrides?.length) {
       const { enableOverrides } = await import('./cdp/overrides.js');
-      await enableOverrides(swCdp, config.overrides);
+      await enableOverrides(sw, config.overrides);
     }
 
     // Enable network monitoring on SW target
-    await enableNetworkMonitoring(swCdp, targetType, (req: NetworkRequest) => {
+    await enableNetworkMonitoring(sw, targetType, (req: NetworkRequest) => {
       req.phase = phaseTracker.current;
       sink.request(req);
     }, phaseTracker);
 
     // Capture SW console messages (separate from page console)
-    (swCdp as any).on('Runtime.consoleAPICalled', (event: any) => {
+    (sw as any).on('Runtime.consoleAPICalled', (event: any) => {
       // Skip our own hook messages (handled by onServiceWorkerHookCallback)
       const firstArg = event.args?.[0];
       if (firstArg?.value === '[CWS_HOOK]') return;
@@ -268,9 +273,9 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
 
     // Inject chrome.* API hooks into service worker via Runtime.evaluate.
     // This also calls Runtime.runIfWaitingForDebugger to resume the SW.
-    await injectServiceWorkerHooks(swCdp, false);
+    await injectServiceWorkerHooks(sw, false);
 
-    onServiceWorkerHookCallback(swCdp, (data: any) => {
+    onServiceWorkerHookCallback(sw, (data: any) => {
       const call: ApiCall = {
         id: buffer.nextId(),
         timestamp: new Date(data.ts).toISOString(),
@@ -287,16 +292,16 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
 
     // For MV2 background pages, we need to resume manually (no auto-attach pause)
     if (isMV2Background) {
-      await swCdp.send('Runtime.runIfWaitingForDebugger').catch(() => {});
+      await sw.send('Runtime.runIfWaitingForDebugger').catch(() => {});
     }
 
     // Inject time acceleration if enabled (skip for --session runs — we want
     // to observe natural behavior after onboarding, not break Date.now)
     if (config.scenario.timeAcceleration && !config.sessionDir) {
       try {
-        await accelerateAlarms(swCdp);
+        await accelerateAlarms(sw);
         for (const jump of config.scenario.timeJumps) {
-          await injectTimeOverride(swCdp, jump);
+          await injectTimeOverride(sw, jump);
         }
         log.info({ timeJumps: config.scenario.timeJumps }, 'Time acceleration injected');
       } catch (err) {
@@ -305,6 +310,11 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     }
 
     log.info({ targetType }, 'Background target instrumented (resumed)');
+    } catch (err: any) {
+      // SW failed to register/attach — proceed with page-only analysis
+      log.warn({ err: err.message }, 'Background target not found — running page-only analysis (no SW hooks/monitoring)');
+      swCdp = null;
+    }
 
     // Periodic state updates for the dashboard (every 5s)
     const stateInterval = setInterval(() => {
@@ -361,9 +371,25 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     }
 
     // 5. Run the browsing scenario (engine updates phaseTracker.current)
+    //
+    // After ext-interact, the original page may be dead (extension closed/navigated it,
+    // or page.close() in ext-interact hit the wrong page). Get a fresh page if needed.
+    let scenarioPage: Page;
+    try {
+      // Check if original page is still alive
+      await page.evaluate(() => true);
+      scenarioPage = page;
+    } catch {
+      log.warn('Original page died during ext-interact, creating new page');
+      const freshPages = await browser.pages();
+      const livePage = freshPages.find((p) => !p.isClosed());
+      scenarioPage = livePage ?? await browser.newPage();
+      await instrumentPage(scenarioPage, buffer, sink, phaseTracker, config.overrides);
+    }
+
     const browsingPhases = config.scenario.phases.filter(p => p !== 'ext-interact');
     log.info('Starting browsing scenario...');
-    await runScenario(page, { ...config.scenario, phases: browsingPhases }, config.canary, canaryPort, phaseTracker);
+    await runScenario(scenarioPage, { ...config.scenario, phases: browsingPhases }, config.canary, canaryPort, phaseTracker, browser);
     phaseTracker.current = 'post';
     log.info('Scenario complete');
 

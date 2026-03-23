@@ -36,10 +36,11 @@ const MIME_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
 };
 
-export async function startCanaryServer(port: number): Promise<void> {
+export async function startCanaryServer(port: number): Promise<number> {
   return new Promise((resolve, reject) => {
     server = createServer(async (req, res) => {
-      const url = new URL(req.url ?? '/', `http://localhost:${port}`);
+      const actualPort = (server?.address() as any)?.port ?? port;
+      const url = new URL(req.url ?? '/', `http://localhost:${actualPort}`);
       let filePath: string;
 
       // Map routes to files
@@ -76,8 +77,9 @@ export async function startCanaryServer(port: number): Promise<void> {
     });
 
     server.listen(port, '127.0.0.1', () => {
-      log.info({ port }, 'Canary page server listening');
-      resolve();
+      const actualPort = (server!.address() as any).port as number;
+      log.info({ port: actualPort }, 'Canary page server listening');
+      resolve(actualPort);
     });
 
     server.on('error', reject);

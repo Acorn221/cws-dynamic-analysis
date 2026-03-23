@@ -2,16 +2,27 @@
  * Scenario engine — runs the 7-phase browsing scenario against
  * a Chrome instance with an extension loaded.
  */
-import type { Page } from 'puppeteer';
+import type { Browser, Page } from 'puppeteer';
 import type { ScenarioConfig, PhaseId, CanaryConfig } from '../types/config.js';
 import type { PhaseTracker } from './phase-tracker.js';
 import { logger } from '../logger.js';
 
 const log = logger.child({ component: 'scenario' });
 
+/** Check if a page's CDP session is still alive. */
+async function isPageAlive(page: Page): Promise<boolean> {
+  try {
+    await page.evaluate(() => true);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Execute the full scenario sequence on the given page.
  * Updates phaseTracker.current so event handlers know which phase is active.
+ * Recovers automatically if the page dies mid-scenario.
  */
 export async function runScenario(
   page: Page,
@@ -19,9 +30,11 @@ export async function runScenario(
   canary: CanaryConfig,
   canaryPort: number,
   phaseTracker?: PhaseTracker,
+  browser?: Browser,
 ): Promise<void> {
   const startTime = Date.now();
   const canaryBase = `http://127.0.0.1:${canaryPort}`;
+  let activePage = page;
 
   for (const phaseId of config.phases) {
     const elapsed = (Date.now() - startTime) / 1000;
@@ -34,13 +47,26 @@ export async function runScenario(
     const phaseDuration = config.phaseDurations[phaseId] ?? 60;
     log.info({ phaseId, phaseDuration }, 'Starting phase');
 
+    // Recover dead page before each phase
+    if (!(await isPageAlive(activePage)) && browser) {
+      log.warn({ phaseId }, 'Page died, recovering with new page');
+      const pages = await browser.pages();
+      const livePage = pages.find((p) => !p.isClosed());
+      activePage = livePage ?? await browser.newPage();
+    }
+
     try {
       await Promise.race([
-        runPhase(phaseId, page, config, canary, canaryBase),
+        runPhase(phaseId, activePage, config, canary, canaryBase),
         sleep(phaseDuration * 1000),
       ]);
-    } catch (err) {
-      log.error({ err, phaseId }, 'Phase failed');
+    } catch (err: any) {
+      // If it's a session/target close error, mark page as dead so next phase recovers
+      if (err?.name === 'TargetCloseError' || err?.message?.includes('Session closed')) {
+        log.warn({ phaseId }, 'Page closed during phase, will recover');
+      } else {
+        log.error({ err, phaseId }, 'Phase failed');
+      }
     }
 
     log.info({ phaseId }, 'Phase complete');
