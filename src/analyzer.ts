@@ -224,7 +224,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       targetType = 'service_worker';
       let swTarget = browser.targets().find((t) => bgFilter(t as Target)) as Target | undefined;
       if (!swTarget) {
-        swTarget = await browser.waitForTarget(bgFilter, { timeout: 30_000 }) as Target;
+        swTarget = await browser.waitForTarget(bgFilter, { timeout: 10_000 }) as Target;
       }
       swCdp = await swTarget.createCDPSession();
       await swCdp.send('Runtime.enable');

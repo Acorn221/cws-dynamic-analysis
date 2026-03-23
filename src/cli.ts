@@ -116,7 +116,13 @@ program
       config.scenario.phases = opts.phases.split(',').map((s: string) => s.trim()) as PhaseId[];
     }
     if (opts.interactModel) config.analysis.triageModel = opts.interactModel;
-    if (opts.agentDriven) config.agentDriven = true;
+    if (opts.agentDriven) {
+      config.agentDriven = true;
+      // Default to no-instrument in agent-driven mode — the rewriter breaks
+      // many extensions. CDP runtime injection covers everything we need.
+      // User can still force rewriting with explicit --instrument flag.
+      config.instrument = false;
+    }
 
     logger.info({
       extensionPath: absPath,

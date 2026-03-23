@@ -48,20 +48,33 @@ export async function launchBrowser(
     (t.type() === 'service_worker' || t.type() === 'background_page') &&
     t.url().startsWith('chrome-extension://');
 
-  // Give Chrome time to register extension targets (5s needed with stealth args)
-  await new Promise((r) => setTimeout(r, 5000));
+  // Give Chrome time to register extension targets
+  await new Promise((r) => setTimeout(r, 3000));
 
   let swTarget = browser.targets().find(bgFilter);
   if (!swTarget) {
     log.debug('Background target not in existing targets, waiting...');
-    swTarget = await browser.waitForTarget(bgFilter, { timeout: 30_000 });
+    try {
+      swTarget = await browser.waitForTarget(bgFilter, { timeout: 10_000 });
+    } catch {
+      log.warn('No background target found after 10s — extension may have no SW/background page');
+    }
   } else {
     log.debug({ type: swTarget.type() }, 'Background target found in existing targets');
   }
 
-  // Extract extension ID from the background target URL
-  const extensionId = new URL(swTarget.url()).hostname;
-  log.info({ extensionId }, 'Extension loaded');
+  // Extract extension ID from the background target URL, or try to find it from any extension target
+  let extensionId = 'unknown';
+  if (swTarget) {
+    extensionId = new URL(swTarget.url()).hostname;
+  } else {
+    // Fallback: look for ANY chrome-extension:// target
+    const anyExtTarget = browser.targets().find((t: any) => t.url().startsWith('chrome-extension://'));
+    if (anyExtTarget) {
+      extensionId = new URL(anyExtTarget.url()).hostname;
+    }
+  }
+  log.info({ extensionId, hasBgTarget: !!swTarget }, 'Extension loaded');
 
   // Apply page-level stealth to all pages + auto-apply to new ones
   for (const p of await browser.pages()) {
