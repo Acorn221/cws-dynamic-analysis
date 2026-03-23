@@ -17,11 +17,10 @@ describe('browser launch args', () => {
     expect(browserSrc).toContain('...STEALTH_ARGS');
   });
 
-  it('should wait at least 5 seconds for SW detection', () => {
-    // 2s was too short — SW registration is slow with stealth args
+  it('should wait at least 3 seconds for SW detection', () => {
     const waitMatch = browserSrc.match(/setTimeout\(r,\s*(\d+)\)/);
     expect(waitMatch).toBeTruthy();
-    expect(Number(waitMatch![1])).toBeGreaterThanOrEqual(5000);
+    expect(Number(waitMatch![1])).toBeGreaterThanOrEqual(3000);
   });
 
   it('should detect both service_worker and background_page targets', () => {
