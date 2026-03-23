@@ -65,7 +65,7 @@ program
   .option('-i, --extension-id <id>', 'Extension ID (auto-detected from Chrome if omitted)')
   .option('-o, --output <dir>', 'Output directory for results', './output')
   .option('--headless', 'Run headless (no display needed)', false)
-  .option('--no-stealth', 'Disable puppeteer-extra-plugin-stealth')
+  .option('--no-stealth', 'Disable stealth mode (custom UA, fingerprint spoofing)')
   .option('--no-instrument', 'Skip source rewriting (use runtime injection only)')
   .option('--session <dir>', 'Reuse browser from an interact session (same profile/state)')
   .option('--override <json>', 'JSON array of overrides: [{"urlPattern":"*config*","action":"mock","body":"{}"}]')

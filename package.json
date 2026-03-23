@@ -34,8 +34,6 @@
     "pino-pretty": "^13.0.0",
     "puppeteer": "^24.0.0",
     "puppeteer-cluster": "^0.24.0",
-    "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "ws": "^8.20.0"
   },
   "devDependencies": {
