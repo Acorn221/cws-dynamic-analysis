@@ -112,11 +112,29 @@ program
         process.exit(1);
       }
       const profileTmp = join(config.outputDir, '.profile');
-      await mkdir(profileTmp, { recursive: true });
+      await mkdir(join(profileTmp, 'Default'), { recursive: true });
       const { execSync } = await import('node:child_process');
-      execSync(`cp -a --reflink=auto "${profileSrc}/." "${profileTmp}/"`, { stdio: 'ignore' });
+      // Copy only essential profile files — full profile copy breaks extension loading.
+      // Cookies + Login Data give us authenticated sessions.
+      // Preferences + Secure Preferences keep Chrome settings.
+      // Local Storage + Session Storage have site-specific state.
+      const essentials = [
+        'Local State',
+        'Default/Cookies', 'Default/Cookies-journal',
+        'Default/Login Data', 'Default/Login Data-journal',
+        'Default/Preferences', 'Default/Secure Preferences',
+        'Default/Web Data', 'Default/Web Data-journal',
+        'Default/History', 'Default/History-journal',
+      ];
+      const dirs = ['Default/Local Storage', 'Default/Session Storage'];
+      for (const f of essentials) {
+        execSync(`cp -a "${profileSrc}/${f}" "${profileTmp}/${f}" 2>/dev/null || true`, { stdio: 'ignore' });
+      }
+      for (const d of dirs) {
+        execSync(`cp -a "${profileSrc}/${d}" "${profileTmp}/${d}" 2>/dev/null || true`, { stdio: 'ignore' });
+      }
       config.browser.userDataDir = profileTmp;
-      logger.info({ profile: opts.profile }, 'Using Chrome profile (copied to temp)');
+      logger.info({ profile: opts.profile }, 'Using Chrome profile (essentials copied)');
     }
 
     // Parse overrides from --override (inline JSON), --override-file, or --override-dir

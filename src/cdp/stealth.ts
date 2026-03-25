@@ -10,6 +10,7 @@ export const MAC_UA =
 
 export const STEALTH_ARGS = [
   '--no-sandbox',
+  '--disable-setuid-sandbox',
   '--no-first-run',
   '--disable-default-apps',
   '--disable-component-update',
