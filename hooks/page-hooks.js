@@ -141,6 +141,7 @@
             name: this.name,
             id: this.id,
             valueLen: val ? val.length : 0,
+            value: val || '',
           });
         }
         return val;

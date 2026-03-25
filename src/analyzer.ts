@@ -281,7 +281,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
         timestamp: new Date(data.ts).toISOString(),
         api: data.api,
         args: data.args ?? [],
-        returnValueSummary: data.result != null ? JSON.stringify(data.result).slice(0, 200) : undefined,
+        returnValueSummary: data.result != null ? JSON.stringify(data.result) : undefined,
         callerContext: isMV2Background ? 'background_page' : 'service_worker',
         source: 'bgsw',
         relatedEvents: [],
@@ -362,18 +362,39 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     await instrumentPage(page, buffer, sink, phaseTracker, config.overrides);
 
     // Instrument any new pages that open during the scenario
+    const instrumentedUrls = new Set<string>();
+    const tryInstrumentAll = async () => {
+      try {
+        const allPages = await browser!.pages();
+        for (const p of allPages) {
+          const url = p.url();
+          if (url === 'about:blank' || url.startsWith('chrome://') || url.startsWith('devtools://')) continue;
+          if (instrumentedUrls.has(url)) continue;
+          try {
+            await instrumentPage(p, buffer, sink, phaseTracker, config.overrides);
+            instrumentedUrls.add(url);
+            log.debug({ url: url.slice(0, 80) }, 'Instrumented page');
+          } catch {}
+        }
+      } catch {}
+    };
+
     browser.on('targetcreated', async (target: Target) => {
       if (target.type() === 'page') {
         try {
           const newPage = await target.page();
           if (newPage) {
             await instrumentPage(newPage, buffer, sink, phaseTracker, config.overrides);
+            instrumentedUrls.add(newPage.url());
           }
         } catch (err) {
           log.debug({ err }, 'Failed to instrument new page target');
         }
       }
     });
+
+    // Re-instrument periodically to catch pages opened via address bar / VNC
+    const instrumentInterval = setInterval(tryInstrumentAll, 3000);
 
     if (config.agentDriven) {
       // ── Agent-driven mode ──
@@ -495,6 +516,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     };
 
     clearInterval(stateInterval);
+    clearInterval(instrumentInterval);
 
     // 6. Write results
     await writeRunState(config.outputDir, { phase: 'done', status: 'completed' }).catch(() => {});

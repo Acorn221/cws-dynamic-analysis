@@ -192,8 +192,36 @@ async function interactActionInner(
       case 'type':
         if (!action.selector || !action.text) { browser.disconnect(); return 'ERROR: type requires selector and text'; }
         await page.waitForSelector(action.selector, { timeout: 3000 });
-        await page.click(action.selector);
-        await page.type(action.selector, action.text, { delay: 50 });
+        // Use evaluate to set value + dispatch events — page.type() can hang on
+        // sites with heavy JS input handling (e.g. Microsoft login, React SPAs).
+        await page.evaluate((sel, text) => {
+          const el = document.querySelector(sel) as HTMLInputElement | null;
+          if (!el) return;
+          el.focus();
+          // Native value setter + React synthetic event trick:
+          // React tracks the last value it set via an internal tracker.
+          // We must use the native setter AND trigger React's onChange via __reactProps.
+          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+          if (nativeInputValueSetter) nativeInputValueSetter.call(el, text);
+          else el.value = text;
+
+          // Try React fiber props first (React 16+)
+          const reactKey = Object.keys(el).find(k => k.startsWith('__reactProps') || k.startsWith('__reactFiber'));
+          if (reactKey) {
+            const props = (el as any)[reactKey];
+            // __reactProps has onChange directly; __reactFiber needs memoizedProps
+            const onChange = props?.onChange ?? props?.memoizedProps?.onChange;
+            if (typeof onChange === 'function') {
+              onChange({ target: el, currentTarget: el, type: 'change', nativeEvent: new Event('change') });
+            }
+          }
+
+          // Dispatch standard DOM events as fallback/complement
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+          el.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', bubbles: true }));
+        }, action.selector, action.text);
         break;
 
       case 'select':
