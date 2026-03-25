@@ -71,6 +71,7 @@ program
   .option('--override <json>', 'JSON array of overrides: [{"urlPattern":"*config*","action":"mock","body":"{}"}]')
   .option('--override-file <path>', 'Path to JSON file with override array')
   .option('--override-dir <dir>', 'Directory of override JSON files (from da dump-overrides)')
+  .option('--profile <name>', 'Chrome profile to use (from ~/.cws-profiles/<name>). Copied to temp dir per run.')
   .option('--agent-driven', 'Pause after instrumentation, let subagent drive browser via da interact', false)
   .option('--quick', 'Quick mode: 30s, browse+login only, for testing tool changes', false)
   .option('--duration <seconds>', 'Max scenario duration in seconds', '120')
@@ -103,6 +104,24 @@ program
     config.instrument = opts.instrument !== false;
     config.sessionDir = opts.session ? resolve(opts.session) : undefined;
     config.browser.executablePath = opts.chromePath;
+
+    // Copy profile to temp dir so extensions don't pollute the base profile
+    if (opts.profile) {
+      const profileSrc = join(process.env.HOME || '~', '.cws-profiles', opts.profile);
+      try {
+        await stat(profileSrc);
+      } catch {
+        logger.error({ profile: opts.profile, path: profileSrc }, 'Profile not found');
+        process.exit(1);
+      }
+      const profileTmp = join(config.outputDir, '.profile');
+      await mkdir(profileTmp, { recursive: true });
+      const { execSync } = await import('node:child_process');
+      execSync(`cp -a "${profileSrc}/." "${profileTmp}/"`, { stdio: 'ignore' });
+      config.browser.userDataDir = profileTmp;
+      logger.info({ profile: opts.profile }, 'Using Chrome profile (copied to temp)');
+    }
+
     // Parse overrides from --override (inline JSON), --override-file, or --override-dir
     if (opts.override) {
       config.overrides = JSON.parse(opts.override);
