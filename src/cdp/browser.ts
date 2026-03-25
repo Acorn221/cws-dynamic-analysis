@@ -61,7 +61,35 @@ export async function launchBrowser(
     try {
       swTarget = await browser.waitForTarget(bgFilter, { timeout: 10_000 });
     } catch {
-      log.warn('No background target found after 10s — extension may have no SW/background page');
+      // Puppeteer's target list misses late-registering SWs.
+      // Fall back to CDP Target.getTargets which sees everything.
+      log.debug('Puppeteer waitForTarget failed, trying CDP Target.getTargets...');
+      try {
+        const page = (await browser.pages())[0];
+        if (page) {
+          const cdp = await page.createCDPSession();
+          const { targetInfos } = await cdp.send('Target.getTargets' as any);
+          const swInfo = (targetInfos as any[]).find((t: any) =>
+            (t.type === 'service_worker' || t.type === 'background_page') &&
+            t.url.startsWith('chrome-extension://'),
+          );
+          if (swInfo) {
+            log.info({ url: swInfo.url }, 'Found SW via CDP Target.getTargets (invisible to Puppeteer)');
+            // Get the target via Puppeteer using the URL
+            swTarget = browser.targets().find((t: any) => t.url() === swInfo.url);
+            if (!swTarget) {
+              // Force Puppeteer to discover it by attaching
+              swTarget = await browser.waitForTarget((t: any) => t.url() === swInfo.url, { timeout: 5_000 }).catch(() => undefined);
+            }
+          }
+          await cdp.detach().catch(() => {});
+        }
+      } catch (cdpErr) {
+        log.debug({ err: cdpErr }, 'CDP Target.getTargets fallback failed');
+      }
+      if (!swTarget) {
+        log.warn('No background target found — extension may have no SW/background page');
+      }
     }
   } else {
     log.debug({ type: swTarget.type() }, 'Background target found in existing targets');
@@ -72,10 +100,22 @@ export async function launchBrowser(
   if (swTarget) {
     extensionId = new URL(swTarget.url()).hostname;
   } else {
-    // Fallback: look for ANY chrome-extension:// target
+    // Fallback: look for ANY chrome-extension:// target (including via CDP)
     const anyExtTarget = browser.targets().find((t: any) => t.url().startsWith('chrome-extension://'));
     if (anyExtTarget) {
       extensionId = new URL(anyExtTarget.url()).hostname;
+    } else {
+      // Last resort: CDP Target.getTargets for any extension URL
+      try {
+        const page = (await browser.pages())[0];
+        if (page) {
+          const cdp = await page.createCDPSession();
+          const { targetInfos } = await cdp.send('Target.getTargets' as any);
+          const extInfo = (targetInfos as any[]).find((t: any) => t.url.startsWith('chrome-extension://'));
+          if (extInfo) extensionId = new URL(extInfo.url).hostname;
+          await cdp.detach().catch(() => {});
+        }
+      } catch {}
     }
   }
   log.info({ extensionId, hasBgTarget: !!swTarget }, 'Extension loaded');
