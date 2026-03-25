@@ -309,7 +309,32 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       }
     }
 
+    // Spoof chrome.management.getSelf to return installType: "normal"
+    // Extensions loaded via --load-extension show "development" which
+    // malicious extensions check to disable their behavior during analysis.
+    await sw.send('Runtime.evaluate', {
+      expression: `
+        if (chrome.management && chrome.management.getSelf) {
+          const _orig = chrome.management.getSelf;
+          chrome.management.getSelf = function(cb) {
+            if (typeof cb === 'function') {
+              return _orig.call(this, function(info) {
+                info.installType = 'normal';
+                cb(info);
+              });
+            }
+            return _orig.call(this).then(function(info) {
+              info.installType = 'normal';
+              return info;
+            });
+          };
+        }
+      `,
+      awaitPromise: false,
+      returnByValue: true,
+    }).catch(() => {});
     log.info({ targetType }, 'Background target instrumented (resumed)');
+
     } catch (err: any) {
       // SW failed to register/attach — proceed with page-only analysis
       log.warn({ err: err.message }, 'Background target not found — running page-only analysis (no SW hooks/monitoring)');
