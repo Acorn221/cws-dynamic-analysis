@@ -114,7 +114,7 @@ program
       const profileTmp = join(config.outputDir, '.profile');
       await mkdir(profileTmp, { recursive: true });
       const { execSync } = await import('node:child_process');
-      execSync(`cp -a "${profileSrc}/." "${profileTmp}/"`, { stdio: 'ignore' });
+      execSync(`cp -a --reflink=auto "${profileSrc}/." "${profileTmp}/"`, { stdio: 'ignore' });
       config.browser.userDataDir = profileTmp;
       logger.info({ profile: opts.profile }, 'Using Chrome profile (copied to temp)');
     }
