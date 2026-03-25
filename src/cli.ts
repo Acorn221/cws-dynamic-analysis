@@ -117,6 +117,15 @@ program
       execSync(`cp -a --reflink=auto "${profileSrc}/." "${profileTmp}/"`, { stdio: 'ignore' });
       // Remove Chrome lock files — stale locks from previous sessions prevent extension loading
       execSync(`rm -f "${profileTmp}/SingletonLock" "${profileTmp}/SingletonCookie" "${profileTmp}/SingletonSocket" "${profileTmp}/Default/LOCK"`, { stdio: 'ignore' });
+      // Force developer mode on — required for --load-extension with MV3
+      try {
+        const prefsPath = join(profileTmp, 'Default', 'Preferences');
+        const prefs = JSON.parse(await readFile(prefsPath, 'utf-8'));
+        if (!prefs.extensions) prefs.extensions = {};
+        if (!prefs.extensions.ui) prefs.extensions.ui = {};
+        prefs.extensions.ui.developer_mode = true;
+        await writeFile(prefsPath, JSON.stringify(prefs));
+      } catch { /* no prefs file — Chrome will create one */ }
       config.browser.userDataDir = profileTmp;
       logger.info({ profile: opts.profile }, 'Using Chrome profile');
     }
