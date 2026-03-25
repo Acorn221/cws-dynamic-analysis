@@ -65,7 +65,6 @@ program
   .option('-i, --extension-id <id>', 'Extension ID (auto-detected from Chrome if omitted)')
   .option('-o, --output <dir>', 'Output directory for results', './output')
   .option('--headless', 'Run headless (no display needed)', false)
-  .option('--no-stealth', 'Disable stealth mode (custom UA, fingerprint spoofing)')
   .option('--no-instrument', 'Skip source rewriting (use runtime injection only)')
   .option('--session <dir>', 'Reuse browser from an interact session (same profile/state)')
   .option('--override <json>', 'JSON array of overrides: [{"urlPattern":"*config*","action":"mock","body":"{}"}]')
@@ -76,7 +75,6 @@ program
   .option('--quick', 'Quick mode: 30s, browse+login only, for testing tool changes', false)
   .option('--duration <seconds>', 'Max scenario duration in seconds', '120')
   .option('--chrome-path <path>', 'Chrome binary path (auto-detected if omitted)')
-  .option('--interact-model <model>', 'Model for extension UI interaction', 'claude-haiku-4-5-20251001')
   .option(
     '--phases <phases>',
     'Comma-separated phases: install,ext-interact,browse,login,banking,shopping,idle,tabs',
@@ -100,7 +98,6 @@ program
     const config = defaultConfig(opts.extensionId ?? 'unknown', absPath);
     config.outputDir = resolve(opts.output);
     config.browser.headless = opts.headless;
-    config.browser.stealth = opts.stealth !== false;
     config.instrument = opts.instrument !== false;
     config.sessionDir = opts.session ? resolve(opts.session) : undefined;
     config.browser.executablePath = opts.chromePath;
@@ -137,7 +134,6 @@ program
       config.scenario.maxDuration = parseInt(opts.duration, 10);
       config.scenario.phases = opts.phases.split(',').map((s: string) => s.trim()) as PhaseId[];
     }
-    if (opts.interactModel) config.analysis.triageModel = opts.interactModel;
     if (opts.agentDriven) {
       config.agentDriven = true;
       // Default to no-instrument in agent-driven mode — the rewriter breaks
