@@ -1,12 +1,12 @@
 /**
  * Stealth configuration — emulates a MacBook Pro 14" M1 Pro running
- * Chrome 131 on macOS Sonoma 14.4. Every fingerprint value is sourced
+ * Chrome 146 on macOS Sonoma 14.4. Every fingerprint value is sourced
  * from a real device to pass bot detection checks.
  */
 import type { Page } from 'puppeteer';
 
 export const MAC_UA =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36';
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 
 export const STEALTH_ARGS = [
   '--no-sandbox',
@@ -52,8 +52,8 @@ const STEALTH_SCRIPT = `
 
   // userAgentData
   var brands = [
-    { brand: 'Google Chrome', version: '131' },
-    { brand: 'Chromium', version: '131' },
+    { brand: 'Google Chrome', version: '146' },
+    { brand: 'Chromium', version: '146' },
     { brand: 'Not_A Brand', version: '24' },
   ];
   Object.defineProperty(navigator, 'userAgentData', {
@@ -68,10 +68,10 @@ const STEALTH_SCRIPT = `
         if (hints.includes('bitness')) v.bitness = '64';
         if (hints.includes('model')) v.model = '';
         if (hints.includes('platformVersion')) v.platformVersion = '14.4.0';
-        if (hints.includes('uaFullVersion')) v.uaFullVersion = '131.0.6778.86';
+        if (hints.includes('uaFullVersion')) v.uaFullVersion = '146.0.0.0';
         if (hints.includes('fullVersionList')) v.fullVersionList = [
-          { brand: 'Google Chrome', version: '131.0.6778.86' },
-          { brand: 'Chromium', version: '131.0.6778.86' },
+          { brand: 'Google Chrome', version: '146.0.0.0' },
+          { brand: 'Chromium', version: '146.0.0.0' },
           { brand: 'Not_A Brand', version: '24.0.0.0' },
         ];
         return v;
