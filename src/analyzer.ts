@@ -71,6 +71,7 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
   log.info({ port: canaryPort }, 'Canary server started');
 
   let browser: Browser | null = null;
+  let swTargetIdFromLaunch: string | undefined;
   let jsonl: JsonlWriter | null = null;
   let sqlite: SqliteStore | null = null;
   let jsonlPath = '';
@@ -99,11 +100,12 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       }
 
       log.info('Launching browser...');
-      const { browser: b, extensionId } = await launchBrowser(extensionLoadPath, config.browser);
-      browser = b;
+      const launchResult = await launchBrowser(extensionLoadPath, config.browser);
+      browser = launchResult.browser;
+      swTargetIdFromLaunch = launchResult.swTargetId;
 
       if (config.extensionId === 'unknown') {
-        config.extensionId = extensionId;
+        config.extensionId = launchResult.extensionId;
       }
       log.info({ extensionId: config.extensionId }, 'Browser launched, extension loaded');
     }
@@ -224,10 +226,28 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
       targetType = 'service_worker';
       let swTarget = browser.targets().find((t) => bgFilter(t as Target)) as Target | undefined;
       if (!swTarget) {
-        swTarget = await browser.waitForTarget(bgFilter, { timeout: 10_000 }) as Target;
+        try {
+          swTarget = await browser.waitForTarget(bgFilter, { timeout: 10_000 }) as Target;
+        } catch {
+          // Puppeteer can't see the SW — try direct CDP attachment
+          if (swTargetIdFromLaunch) {
+            log.info({ swTargetIdFromLaunch }, 'Attaching to SW via CDP Target.attachToTarget');
+            const browserCdpForSW = await (browser as any).target().createCDPSession();
+            const { sessionId } = await browserCdpForSW.send('Target.attachToTarget', {
+              targetId: swTargetIdFromLaunch,
+              flatten: true,
+            });
+            // Get the flattened session from the browser connection
+            swCdp = (browser as any)._connection._sessions.get(sessionId) ?? browserCdpForSW;
+            await swCdp!.send('Runtime.enable');
+            log.info('Successfully attached to SW via raw CDP');
+          }
+        }
       }
-      swCdp = await swTarget.createCDPSession();
-      await swCdp.send('Runtime.enable');
+      if (!swCdp && swTarget) {
+        swCdp = await swTarget.createCDPSession();
+        await swCdp.send('Runtime.enable');
+      }
     }
 
     // At this point swCdp is definitely assigned (all branches above set it)
@@ -335,10 +355,51 @@ export async function analyze(config: RunConfig): Promise<AnalysisResult> {
     }).catch(() => {});
     log.info({ targetType }, 'Background target instrumented (resumed)');
 
+    // Also start raw CDP monitoring as backup — Puppeteer sessions on late-discovered SWs
+    // can silently fail to capture network traffic even when createCDPSession() succeeds.
+    if (swTargetIdFromLaunch && browser) {
+      try {
+        const { attachToSwViaCdp } = await import('./cdp/raw-cdp.js');
+        const cleanupRawCdp = await attachToSwViaCdp({
+          wsEndpoint: browser.wsEndpoint(),
+          swTargetId: swTargetIdFromLaunch,
+          onRequest: (req: NetworkRequest) => {
+            req.phase = phaseTracker.current;
+            sink.request(req);
+          },
+          phaseTracker,
+        });
+        (buffer as any)._rawCdpCleanup = cleanupRawCdp;
+        log.info('Raw CDP SW monitoring active (backup)');
+      } catch { /* non-fatal */ }
+    }
+
     } catch (err: any) {
-      // SW failed to register/attach — proceed with page-only analysis
-      log.warn({ err: err.message }, 'Background target not found — running page-only analysis (no SW hooks/monitoring)');
-      swCdp = null;
+      // SW failed via Puppeteer — try raw CDP WebSocket attachment as last resort
+      if (swTargetIdFromLaunch && browser) {
+        log.info({ swTargetIdFromLaunch }, 'Puppeteer SW attach failed — trying raw CDP WebSocket');
+        try {
+          const { attachToSwViaCdp } = await import('./cdp/raw-cdp.js');
+          const cleanupRawCdp = await attachToSwViaCdp({
+            wsEndpoint: browser.wsEndpoint(),
+            swTargetId: swTargetIdFromLaunch,
+            onRequest: (req: NetworkRequest) => {
+              req.phase = phaseTracker.current;
+              sink.request(req);
+            },
+            phaseTracker,
+          });
+          // Store cleanup for later
+          (buffer as any)._rawCdpCleanup = cleanupRawCdp;
+          log.info('Raw CDP SW monitoring active');
+        } catch (rawErr: any) {
+          log.warn({ err: rawErr.message }, 'Raw CDP attachment also failed — page-only analysis');
+          swCdp = null;
+        }
+      } else {
+        log.warn({ err: err.message }, 'Background target not found — running page-only analysis (no SW hooks/monitoring)');
+        swCdp = null;
+      }
     }
 
     // Periodic state updates for the dashboard (every 5s)

@@ -6,6 +6,8 @@ import { logger } from '../logger.js';
 export interface LaunchResult {
   browser: Browser;
   extensionId: string;
+  /** Target ID for the SW when Puppeteer can't see it — use Target.attachToTarget */
+  swTargetId?: string;
 }
 
 /**
@@ -55,7 +57,24 @@ export async function launchBrowser(
   // Give Chrome time to register extension targets
   await new Promise((r) => setTimeout(r, 3000));
 
+  let swTargetId: string | undefined;
   let swTarget = browser.targets().find(bgFilter);
+
+  // Always get swTargetId via CDP for raw WebSocket backup
+  try {
+    const tmpPage = (await browser.pages())[0];
+    if (tmpPage) {
+      const tmpCdp = await tmpPage.createCDPSession();
+      const { targetInfos } = await tmpCdp.send('Target.getTargets' as any);
+      const swInfo = (targetInfos as any[]).find((t: any) =>
+        (t.type === 'service_worker' || t.type === 'background_page') &&
+        t.url.startsWith('chrome-extension://'),
+      );
+      if (swInfo?.targetId) swTargetId = swInfo.targetId;
+      await tmpCdp.detach().catch(() => {});
+    }
+  } catch {}
+
   if (!swTarget) {
     log.debug('Background target not in existing targets, waiting...');
     try {
@@ -74,11 +93,10 @@ export async function launchBrowser(
             t.url.startsWith('chrome-extension://'),
           );
           if (swInfo) {
-            log.info({ url: swInfo.url }, 'Found SW via CDP Target.getTargets (invisible to Puppeteer)');
-            // Get the target via Puppeteer using the URL
+            log.info({ url: swInfo.url, targetId: swInfo.targetId }, 'Found SW via CDP Target.getTargets');
+            swTargetId = swInfo.targetId;
             swTarget = browser.targets().find((t: any) => t.url() === swInfo.url);
             if (!swTarget) {
-              // Force Puppeteer to discover it by attaching
               swTarget = await browser.waitForTarget((t: any) => t.url() === swInfo.url, { timeout: 5_000 }).catch(() => undefined);
             }
           }
@@ -131,7 +149,7 @@ export async function launchBrowser(
     }
   });
 
-  return { browser, extensionId };
+  return { browser, extensionId, swTargetId };
 }
 
 /**
